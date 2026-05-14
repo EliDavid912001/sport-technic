@@ -838,6 +838,15 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
   .score-sub{font-size:13px;line-height:1.55}
   .tips-txt{font-size:13px;line-height:1.7}
   #muscles-box{font-size:13px!important;line-height:1.75!important}
+  #muscles-box .muscle-section{margin-top:12px}
+  #muscles-box .muscle-section:first-child{margin-top:0}
+  #muscles-box .muscle-section-title{font-weight:800;color:var(--green);font-size:13px}
+  #muscles-box .muscle-section-sub{font-weight:400;color:var(--muted);font-size:12px;margin-inline-start:6px}
+  #muscles-box .muscle-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+  #muscles-box .muscle-line .muscle-pro{font-weight:700}
+  #muscles-box .muscle-he{color:var(--muted);font-weight:400}
+  #muscles-box .muscle-paren{color:var(--muted);font-weight:400}
+  #muscles-box .muscle-empty{color:var(--muted);font-style:italic}
   .fix-item{padding:10px 11px}
   .fix-body{font-size:11.5px;line-height:1.55}
 }
@@ -1204,7 +1213,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 
     <div class="card" style="margin-bottom:14px">
       <div class="card-hdr"><div class="cdot" style="background:var(--blue)"></div><span class="ctitle">שרירים פעילים</span></div>
-      <div class="card-body" id="muscles-box" style="font-size:14px;line-height:1.9"></div>
+      <div class="card-body" id="muscles-box" lang="he" dir="rtl" style="font-size:14px;line-height:1.9"></div>
     </div>
 
     <div class="card" style="margin-bottom:14px">
@@ -1267,6 +1276,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="src/utils/scoringEngine.js"></script>
+<script src="src/utils/AnatomicalEngine.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/loaders/DRACOLoader.js"></script>
@@ -3487,9 +3497,22 @@ function sanitizeAnalysisData(d){
   const confidenceMeta = getConfidenceMeta(out.objective_metrics);
   const exKey = String(selEx || '').toLowerCase();
   const dText = String(out.detected_exercise || '').toLowerCase();
+  let anatomicalFromLibrary = false;
+  if (typeof TrainIQAnatomicalEngine !== 'undefined' && TrainIQAnatomicalEngine.getTruthForRegistryKey) {
+    const truth = TrainIQAnatomicalEngine.getTruthForRegistryKey(selEx, out.muscles);
+    if (truth && truth.fromLibrary) {
+      anatomicalFromLibrary = true;
+      out.muscles.primary = truth.muscles.primary;
+      out.muscles.secondary = truth.muscles.secondary;
+      out.muscles.stabilizers = truth.muscles.stabilizers;
+      out.objective_metrics.anatomical_truth_engine = true;
+      out.objective_metrics.anatomical_library_id = truth.libraryId;
+    }
+  }
   const addUnique = (arr, name) => { if (name && !arr.includes(name)) arr.push(name); };
   const looksLikePress = ['overheadpress','seateddumbbellpress','shoulderpressmachine','benchpress','chestpressmachine','dumbbellpress','inclinepress','pushup','dips'].includes(exKey) || /לחיצ|press|שכיבות/.test(dText);
   const looksLikePull = ['pullup','chinup','latpulldown','pullover','row','seatedrowmachine','dumbbellrow','muscleup'].includes(exKey) || /מתח|חתיר|pull|row|lat|פולי עליון/.test(dText);
+  if (!anatomicalFromLibrary) {
   const grouped = {
     primary: dedupeMuscleArray(out.muscles.primary || []),
     secondary: dedupeMuscleArray(out.muscles.secondary || []),
@@ -3505,18 +3528,6 @@ function sanitizeAnalysisData(d){
     if (!grouped.primary.length) addUnique(grouped.primary, 'רחב גבי');
     addUnique(grouped.secondary, 'שריר הדו-ראשי הזרועי (Biceps Brachii)'); // Elbow flexion => biceps must exist.
     addUnique(grouped.stabilizers, 'ישר בטני');
-  }
-  if (selEx === 'muscleup') {
-    recommendations = recommendations.map(line =>
-      String(line || '')
-        .replace(/אל\s*תשתמש\s*בתנופה|להימנע\s*מתנופה|בלי\s*תנופה|אסור\s*מומנטום/ig, 'במאסל-אפ מומנטום טכני מותר, הדגש הוא על מעבר חד וסימטרי.')
-    );
-    if (!recommendations.some(line => /C-Curve|קשת|מעבר חד/.test(line))) {
-      recommendations.unshift('מעבר: C-Curve pull חזק ואז דחיפת ראש אגרסיבית כדי לעבור מעל המוט.');
-    }
-    if (!recommendations.some(line => /Chicken-Wing|מרפק אחד/.test(line))) {
-      recommendations.unshift('בטיחות: Avoid Chicken-Wing — מרפקים עולים יחד בסימטריה במעבר.');
-    }
   }
   // Directional validation guardrail from kinematic pattern.
   const kp = String(out.objective_metrics.kinematic_pattern || '').toLowerCase();
@@ -3536,6 +3547,23 @@ function sanitizeAnalysisData(d){
   out.muscles.primary = dedupeMuscleArray(grouped.primary);
   out.muscles.secondary = dedupeMuscleArray(grouped.secondary).filter(m => !out.muscles.primary.includes(m));
   out.muscles.stabilizers = dedupeMuscleArray(grouped.stabilizers).filter(m => !out.muscles.primary.includes(m) && !out.muscles.secondary.includes(m));
+  } else {
+    out.muscles.primary = dedupeMuscleArray(out.muscles.primary || []);
+    out.muscles.secondary = dedupeMuscleArray(out.muscles.secondary || []).filter(m => !out.muscles.primary.includes(m));
+    out.muscles.stabilizers = dedupeMuscleArray(out.muscles.stabilizers || []).filter(m => !out.muscles.primary.includes(m) && !out.muscles.secondary.includes(m));
+  }
+  if (selEx === 'muscleup') {
+    recommendations = recommendations.map(line =>
+      String(line || '')
+        .replace(/אל\s*תשתמש\s*בתנופה|להימנע\s*מתנופה|בלי\s*תנופה|אסור\s*מומנטום/ig, 'במאסל-אפ מומנטום טכני מותר, הדגש הוא על מעבר חד וסימטרי.')
+    );
+    if (!recommendations.some(line => /C-Curve|קשת|מעבר חד/.test(line))) {
+      recommendations.unshift('מעבר: C-Curve pull חזק ואז דחיפת ראש אגרסיבית כדי לעבור מעל המוט.');
+    }
+    if (!recommendations.some(line => /Chicken-Wing|מרפק אחד/.test(line))) {
+      recommendations.unshift('בטיחות: Avoid Chicken-Wing — מרפקים עולים יחד בסימטריה במעבר.');
+    }
+  }
   if (looksLikePull) {
     out.fixes = out.fixes.map(f => {
       const title = String((f && f.title) || '');
@@ -3572,12 +3600,14 @@ function sanitizeAnalysisData(d){
   }
   if (enforceMuscleUp) {
     out.detected_exercise = 'מאסל אפ';
+    if (!anatomicalFromLibrary) {
     const ensure = (arr, name) => { if (!arr.includes(name)) arr.push(name); };
     ensure(out.muscles.primary, 'רחב גבי');
     ensure(out.muscles.primary, 'בייספס');
     ensure(out.muscles.primary, 'חזה');
     ensure(out.muscles.primary, 'טרייספס');
     ensure(out.muscles.stabilizers, 'ישר בטני');
+    }
     out.tips = 'כוח מתפרץ (Explosive Power): תחשוב על להעביר את המרפקים מעל המוט במהירות, כאילו אתה מנסה להטיח את החזה לתוך המוט';
   }
   if (kinematicUncertain && !out.combo_detected) {
@@ -4855,6 +4885,11 @@ async function analyze(){
   let lastPoseMetrics = null;
   dismissVipEntry();
   resetBioAnalysisUI();
+  try {
+    if (typeof TrainIQAnatomicalEngine !== 'undefined' && TrainIQAnatomicalEngine.ensureLibrary) {
+      await TrainIQAnatomicalEngine.ensureLibrary();
+    }
+  } catch (_) {}
   const trimBox = document.getElementById('trim-box');
   if (trimBox) trimBox.style.display = 'none';
   document.getElementById('err').classList.remove('show');
@@ -6090,6 +6125,44 @@ function parseFixImpactPct(s){
   return m ? Number(m[0]) : 0;
 }
 
+function escapeHtmlLite(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Renders "Professional (עברית פשוטה)" with bold professional name for RTL results. */
+function formatMuscleDisplayHtml(label){
+  const raw = String(label || '').trim();
+  if (!raw) return '';
+  const open = raw.lastIndexOf('(');
+  const close = raw.lastIndexOf(')');
+  if (open > 0 && close > open) {
+    const pro = raw.slice(0, open).trim();
+    const he = raw.slice(open + 1, close).trim();
+    return (
+      '<span class="muscle-line"><strong class="muscle-pro">' +
+      escapeHtmlLite(pro) +
+      '</strong> <span class="muscle-paren">(</span><span class="muscle-he">' +
+      escapeHtmlLite(he) +
+      '</span><span class="muscle-paren">)</span></span>'
+    );
+  }
+  return '<span class="muscle-line"><strong class="muscle-pro">' + escapeHtmlLite(raw) + '</strong></span>';
+}
+
+function formatMuscleListHtml(arr){
+  if (!arr || !arr.length) return '<span class="muscle-empty">לא זוהה בוודאות</span>';
+  const u = dedupeMuscleArray(arr);
+  return (
+    '<div class="muscle-list">' +
+    u.map(m => '<div>' + formatMuscleDisplayHtml(m) + '</div>').join('') +
+    '</div>'
+  );
+}
+
 /** One-cue rule: single worst bad fix (by impact %) or first good. */
 function extractPrimaryFocus(fixesArray){
   const arr = Array.isArray(fixesArray) ? fixesArray.slice() : [];
@@ -6161,11 +6234,18 @@ function render(d){
     confidencePill.className = 'confidence-pill ' + cm.key;
   }
   const muscles = d.muscles || {};
-  const formatGroup = arr => {
-    if (!arr || !arr.length) return 'לא זוהה בוודאות';
-    const unique = dedupeMuscleArray(arr);
-    return unique.join(', ');
-  };
+  const L = (typeof TrainIQAnatomicalEngine !== 'undefined' && TrainIQAnatomicalEngine.SECTION_LABELS_HE)
+    ? TrainIQAnatomicalEngine.SECTION_LABELS_HE
+    : null;
+  const secPrimary = L
+    ? '<span class="muscle-section-title">' + escapeHtmlLite(L.primaryTitle) + '</span><span class="muscle-section-sub">' + escapeHtmlLite(L.primarySub) + '</span>'
+    : '<span class="muscle-section-title">המנועים הראשיים</span><span class="muscle-section-sub">(המנוע של התנועה)</span>';
+  const secSecondary = L
+    ? '<span class="muscle-section-title">' + escapeHtmlLite(L.secondaryTitle) + '</span><span class="muscle-section-sub">' + escapeHtmlLite(L.secondarySub) + '</span>'
+    : '<span class="muscle-section-title">שרירים מסייעים</span><span class="muscle-section-sub">(העוזרים)</span>';
+  const secStab = L
+    ? '<span class="muscle-section-title">' + escapeHtmlLite(L.stabilizersTitle) + '</span><span class="muscle-section-sub">' + escapeHtmlLite(L.stabilizersSub) + '</span>'
+    : '<span class="muscle-section-title">מייצבים</span><span class="muscle-section-sub">(שומרים על הגוף יציב)</span>';
   const allMuscles = [
     ...(muscles.primary || []),
     ...(muscles.secondary || []),
@@ -6175,13 +6255,14 @@ function render(d){
   const anatomyHtml = uniqueMuscles.length
     ? '<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);font-size:12px;line-height:1.7;color:var(--muted)">' +
       '<strong style="color:var(--text)">פירוט אנטומי:</strong><br>' +
-      uniqueMuscles.map(m => '• ' + m).join('<br>') +
+      uniqueMuscles.map(m => '• ' + formatMuscleDisplayHtml(m)).join('<br>') +
       '</div>'
     : '';
   document.getElementById('muscles-box').innerHTML =
-    '<div><strong>עיקריים:</strong> '+formatGroup(muscles.primary||[])+'</div>'+
-    '<div><strong>מסייעים:</strong> '+formatGroup(muscles.secondary||[])+'</div>'+
-    '<div><strong>מייצבים:</strong> '+formatGroup(muscles.stabilizers||[])+'</div>' + anatomyHtml;
+    '<div class="muscle-section">' + secPrimary + formatMuscleListHtml(muscles.primary || []) + '</div>' +
+    '<div class="muscle-section">' + secSecondary + formatMuscleListHtml(muscles.secondary || []) + '</div>' +
+    '<div class="muscle-section">' + secStab + formatMuscleListHtml(muscles.stabilizers || []) + '</div>' +
+    anatomyHtml;
   updateResultAnatomyByAnalysis(d);
 
   const focusParts = extractPrimaryFocus(d.fixes);
