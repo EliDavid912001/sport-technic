@@ -152,6 +152,36 @@ const exerciseRegistry = {
         { id: 'serratus_anterior', nameHe: 'משונן', nameEn: 'Serratus anterior' }
       ]
     },
+    /** Deterministic client scoring (ROM / symmetry / eccentric control) — see src/utils/scoringEngine.js */
+    scoring_rules: {
+      weights: { rom: 0.4, symmetry: 0.3, tempo: 0.3 },
+      rom: {
+        bottom_elbow_extension: {
+          joint: 'elbow_avg',
+          aggregate: 'max',
+          target: 168,
+          tolerance: 18,
+          direction: 'higher_better'
+        },
+        top_elbow_flexion: {
+          joint: 'elbow_avg',
+          aggregate: 'min',
+          target: 72,
+          tolerance: 26,
+          direction: 'lower_better'
+        }
+      },
+      symmetry: {
+        elbow_angle_mean_abs_diff_max: 14,
+        knee_angle_mean_abs_diff_max: 18
+      },
+      tempo: {
+        y_series: 'wrist_mid_y',
+        eccentric_dy_positive: true,
+        max_norm_velocity_soft: 3.4,
+        max_norm_velocity_hard: 7.0
+      }
+    },
     biomechanical_cues: [
       {
         fault_id: 'MU_CHICKEN_WING',
@@ -277,6 +307,35 @@ const exerciseRegistry = {
         { id: 'gluteus_maximus', nameHe: 'גלוטאוס מקסימוס', nameEn: 'Gluteus maximus' }
       ]
     },
+    scoring_rules: {
+      weights: { rom: 0.4, symmetry: 0.3, tempo: 0.3 },
+      rom: {
+        eccentric_bottom_elbow_angle: {
+          joint: 'elbow_avg',
+          aggregate: 'min',
+          target: 88,
+          tolerance: 18,
+          direction: 'lower_better'
+        },
+        concentric_lockout_elbow_angle: {
+          joint: 'elbow_avg',
+          aggregate: 'max',
+          target: 172,
+          tolerance: 14,
+          direction: 'higher_better'
+        }
+      },
+      symmetry: {
+        elbow_angle_mean_abs_diff_max: 12,
+        knee_angle_mean_abs_diff_max: 16
+      },
+      tempo: {
+        y_series: 'wrist_mid_y',
+        eccentric_dy_positive: false,
+        max_norm_velocity_soft: 2.9,
+        max_norm_velocity_hard: 6.2
+      }
+    },
     biomechanical_cues: [
       {
         fault_id: 'OHP_ELBOW_FLARE',
@@ -373,6 +432,35 @@ const exerciseRegistry = {
         { id: 'middle_lower_trapezius', nameHe: 'טרפז אמצעי ותחתון', nameEn: 'Middle & lower trapezius' },
         { id: 'rectus_abdominis', nameHe: 'ישר בטני', nameEn: 'Rectus abdominis' }
       ]
+    },
+    scoring_rules: {
+      weights: { rom: 0.4, symmetry: 0.3, tempo: 0.3 },
+      rom: {
+        eccentric_bottom_elbow_angle: {
+          joint: 'elbow_avg',
+          aggregate: 'max',
+          target: 175,
+          tolerance: 15,
+          direction: 'higher_better'
+        },
+        concentric_top_elbow_flexion: {
+          joint: 'elbow_avg',
+          aggregate: 'min',
+          target: 68,
+          tolerance: 22,
+          direction: 'lower_better'
+        }
+      },
+      symmetry: {
+        elbow_angle_mean_abs_diff_max: 12,
+        knee_angle_mean_abs_diff_max: 18
+      },
+      tempo: {
+        y_series: 'wrist_mid_y',
+        eccentric_dy_positive: true,
+        max_norm_velocity_soft: 3.0,
+        max_norm_velocity_hard: 6.5
+      }
     },
     biomechanical_cues: [
       {

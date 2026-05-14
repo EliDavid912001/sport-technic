@@ -565,6 +565,19 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 .fix-item{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;background:var(--bg3);border-radius:10px;border:1px solid var(--border);margin-bottom:8px}
 .fix-item:last-child{margin-bottom:0}
 .fix-item:hover{border-color:var(--border2);transform:translateY(-1px);transition:all .15s ease}
+.next-set-focus-card{
+  padding:22px 20px;
+  border-radius:18px;
+  background:linear-gradient(135deg,rgba(255,255,255,0.10) 0%,rgba(255,255,255,0.03) 50%,rgba(255,255,255,0.06) 100%);
+  border:1px solid rgba(255,255,255,0.14);
+  box-shadow:0 14px 44px rgba(0,0,0,0.22),inset 0 1px 0 rgba(255,255,255,0.12);
+  backdrop-filter:blur(18px) saturate(140%);
+  -webkit-backdrop-filter:blur(18px) saturate(140%);
+}
+.next-set-focus-kicker{font-size:13px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--blue);margin-bottom:10px}
+.next-set-focus-title{font-size:clamp(20px,4.2vw,26px);font-weight:800;line-height:1.2;color:var(--text);margin-bottom:12px}
+.next-set-focus-body{font-size:16px;line-height:1.6;color:var(--muted)}
+.next-set-focus-impact{margin-top:12px;font-size:13px;font-weight:700;color:var(--amber)}
 .fix-ico{width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;flex-shrink:0}
 .fix-ico.bad{background:rgba(239,68,68,0.15);color:var(--red)}
 .fix-ico.good{background:rgba(34,197,94,0.15);color:var(--green)}
@@ -1203,7 +1216,10 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 
     <div class="card" style="margin-bottom:14px">
       <div class="card-hdr"><div class="cdot" style="background:var(--red)"></div><span class="ctitle">מה לתקן · מה היה טוב</span></div>
-      <div class="card-body" id="fix-list"></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+        <div id="next-set-focus-wrap"></div>
+        <div id="fix-list"></div>
+      </div>
     </div>
 
     <div class="card" style="margin-bottom:14px">
@@ -1257,6 +1273,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="src/utils/scoringEngine.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/examples/js/loaders/DRACOLoader.js"></script>
@@ -2334,6 +2351,29 @@ function runDynamicRepEngine(posFrames, timestampsMs, durationSec, exercise){
   };
 }
 
+/** First index where depth-based motion exceeds idle noise; prior frames are setup/idle (trim for TUT + stability). */
+function findActiveSetTrimIndex(posFrames, exercise){
+  if (!Array.isArray(posFrames) || posFrames.length < 8) return 0;
+  const SINGLE = 0.017;
+  const WIN = 5;
+  const CUM = 0.055;
+  for (let i = 1; i < posFrames.length; i++) {
+    const a = getDepthMetric(posFrames[i - 1], exercise);
+    const b = getDepthMetric(posFrames[i], exercise);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    const step = Math.abs(b - a);
+    let cum = 0;
+    const lo = Math.max(0, i - WIN);
+    for (let k = lo; k < i; k++) {
+      const x = getDepthMetric(posFrames[k], exercise);
+      const y = getDepthMetric(posFrames[k + 1], exercise);
+      if (Number.isFinite(x) && Number.isFinite(y)) cum += Math.abs(y - x);
+    }
+    if (step >= SINGLE || cum >= CUM) return Math.max(0, i - 1);
+  }
+  return 0;
+}
+
 async function extractPoseMetrics(file, exercise, options){
   const landmarker = await getPoseLandmarker();
   const opts = options || {};
@@ -2343,8 +2383,9 @@ async function extractPoseMetrics(file, exercise, options){
     return {
       pose_unavailable: true,
       visibility_score: 0,
-      visibility_penalty_pct: 8,
-      visibility_note: 'לא ניתן היה לטעון מנוע Pose. הניתוח בוצע, אך דיוק ביומכני ירד.',
+      visibility_penalty_pct: 0,
+      visibility_note: 'לא ניתן היה לטעון מנוע Pose. הניתוח בוצע לפי הווידאו והמודל.',
+      environmental_warnings: ['לתוצאה מדויקת יותר, הפעל ניתוח Pose או צלם בפריים מלא באור אחיד.'],
       inferred_joints: [],
       missing_joints: ['all_pose_landmarks'],
       analyzed_duration_sec: Number(fallbackDuration.toFixed(2))
@@ -2374,14 +2415,14 @@ async function extractPoseMetrics(file, exercise, options){
   const exKey = String(exercise || '').toLowerCase();
   const isOverheadPressCtx = ['overheadpress','seateddumbbellpress','shoulderpressmachine'].includes(exKey);
   const isMuscleUpCtx = exKey === 'muscleup';
-  const signalTs=[], posFrames=[], torsoLean=[], shoulderWidths=[];
-  const elbowAngles=[], shoulderAngles=[], kneeAngles=[], hipAngles=[], shoulderAsym=[], pelvicTiltAbs=[];
-  const leftElbowAngles=[], rightElbowAngles=[], leftKneeAngles=[], rightKneeAngles=[], leftHipAngles=[], rightHipAngles=[];
-  const leftWristYSeries=[], rightWristYSeries=[], leftHipYSeries=[], rightHipYSeries=[];
-  const spineMidXSeries=[], lumbarDeviationDegSeries=[], valgusFlags=[];
-  const elbowFlareRatioSeries=[], elbowRiseGapSeries=[], transitionVelocitySeries=[];
+  let posFrames=[], signalTs=[], torsoLean=[], shoulderWidths=[];
+  let elbowAngles=[], shoulderAngles=[], kneeAngles=[], hipAngles=[], shoulderAsym=[], pelvicTiltAbs=[];
+  let leftElbowAngles=[], rightElbowAngles=[], leftKneeAngles=[], rightKneeAngles=[], leftHipAngles=[], rightHipAngles=[];
+  let leftWristYSeries=[], rightWristYSeries=[], leftHipYSeries=[], rightHipYSeries=[];
+  let spineMidXSeries=[], lumbarDeviationDegSeries=[], valgusFlags=[];
+  let elbowFlareRatioSeries=[], elbowRiseGapSeries=[], transitionVelocitySeries=[];
   const barPathTrail=[];
-  const hipArcSeries=[], elbowToHipDrive=[], lockoutAboveBarFlags=[], chinClearFlags=[];
+  let hipArcSeries=[], elbowToHipDrive=[], lockoutAboveBarFlags=[], chinClearFlags=[];
   const inferredJointSet = new Set();
   const missingJointSet = new Set();
   let visibilityConfidentCount = 0;
@@ -2583,8 +2624,49 @@ async function extractPoseMetrics(file, exercise, options){
   }
 
   URL.revokeObjectURL(video.src);
-  const mainResult = runDynamicRepEngine(posFrames, signalTs, analysisDuration, exercise);
-  const repsRaw = robustRepConsensus([mainResult.count], analysisDuration);
+  // Idle trim: drop leading frames with no real rep motion so TUT/stability/rep engine ignore setup time.
+  const nFramesBeforeTrim = posFrames.length;
+  const trimIdx = findActiveSetTrimIndex(posFrames, exercise);
+  const sliceFrom = (arr) => (Array.isArray(arr) ? arr.slice(trimIdx) : arr);
+  posFrames = sliceFrom(posFrames);
+  signalTs = sliceFrom(signalTs);
+  torsoLean = sliceFrom(torsoLean);
+  shoulderWidths = sliceFrom(shoulderWidths);
+  elbowAngles = sliceFrom(elbowAngles);
+  shoulderAngles = sliceFrom(shoulderAngles);
+  kneeAngles = sliceFrom(kneeAngles);
+  hipAngles = sliceFrom(hipAngles);
+  shoulderAsym = sliceFrom(shoulderAsym);
+  pelvicTiltAbs = sliceFrom(pelvicTiltAbs);
+  leftElbowAngles = sliceFrom(leftElbowAngles);
+  rightElbowAngles = sliceFrom(rightElbowAngles);
+  leftKneeAngles = sliceFrom(leftKneeAngles);
+  rightKneeAngles = sliceFrom(rightKneeAngles);
+  leftHipAngles = sliceFrom(leftHipAngles);
+  rightHipAngles = sliceFrom(rightHipAngles);
+  leftWristYSeries = sliceFrom(leftWristYSeries);
+  rightWristYSeries = sliceFrom(rightWristYSeries);
+  leftHipYSeries = sliceFrom(leftHipYSeries);
+  rightHipYSeries = sliceFrom(rightHipYSeries);
+  spineMidXSeries = sliceFrom(spineMidXSeries);
+  lumbarDeviationDegSeries = sliceFrom(lumbarDeviationDegSeries);
+  valgusFlags = sliceFrom(valgusFlags);
+  elbowFlareRatioSeries = sliceFrom(elbowFlareRatioSeries);
+  elbowRiseGapSeries = sliceFrom(elbowRiseGapSeries);
+  hipArcSeries = sliceFrom(hipArcSeries);
+  elbowToHipDrive = sliceFrom(elbowToHipDrive);
+  lockoutAboveBarFlags = sliceFrom(lockoutAboveBarFlags);
+  chinClearFlags = sliceFrom(chinClearFlags);
+  transitionVelocitySeries = sliceFrom(transitionVelocitySeries);
+  if (barPathTrail.length === nFramesBeforeTrim && trimIdx > 0) {
+    barPathTrail.splice(0, trimIdx);
+  }
+  const trimmedWallSec = (signalTs.length >= 2 && Number.isFinite(signalTs[0]) && Number.isFinite(signalTs[signalTs.length - 1]))
+    ? Math.max(0.12, (signalTs[signalTs.length - 1] - signalTs[0]) / 1000)
+    : analysisDuration * (posFrames.length / Math.max(1, nFramesBeforeTrim));
+  const idleLeadSec = (trimIdx / Math.max(1, sampleCount - 1)) * analysisDuration;
+  const mainResult = runDynamicRepEngine(posFrames, signalTs, trimmedWallSec, exercise);
+  const repsRaw = robustRepConsensus([mainResult.count], trimmedWallSec);
   const repScores = mainResult.repScores;
   const agreementConfidence = mainResult.confidence;
   const reps = repsRaw;
@@ -2743,16 +2825,35 @@ async function extractPoseMetrics(file, exercise, options){
   const visibilityScoreRaw = visibilityTotalCount > 0 ? (visibilityConfidentCount / visibilityTotalCount) : 0;
   const exposureBoostRatio = exposureBoostFrames > 0 ? (exposureBoostFrames / Math.max(1, sampleCount)) : 0;
   const visibilityScore = Math.max(0, Math.min(1, visibilityScoreRaw + Math.min(0.12, exposureBoostRatio * 0.08)));
-  const visibilityPenaltyPct = visibilityScore >= 0.9 ? 0
-    : visibilityScore >= 0.75 ? 2
-    : visibilityScore >= 0.6 ? 5
-    : 8;
   const avgCornerMotion = cornerMotion.length ? meanFinite(cornerMotion) : 0;
   const cameraShakePct = avgCornerMotion < 2.2 ? 0 : Number(Math.min(100, (avgCornerMotion - 2.2) * 3.2).toFixed(1));
   const staticBackgroundLikely = avgCornerMotion < 2.2;
   const visibilityNote = visibilityScore >= 0.75
     ? 'הצילום מאפשר ניתוח טוב.'
-    : 'הניתוח בוצע, אך חלק מהגוף מחוץ לפריים - זה עלול להשפיע על דיוק הציון.';
+    : 'חלק מהגוף פחות נראה בפריים — הציון הביומכני לא מושפע; זה רק מומלץ לשפר צילום לדיוק עתידי.';
+  const environmental_warnings = [];
+  if (visibilityScore < 0.75) {
+    environmental_warnings.push('לתוצאה מדויקת יותר, צלם מגובה מותן באור מלא כך שכל המפרקים העיקריים נשארים בפריים.');
+  } else if (visibilityScore < 0.9) {
+    environmental_warnings.push('מומלץ להרחיב מעט את הפריים או להתקרב — כך הזיהוי יהיה עקבי יותר בניתוחים הבאים.');
+  }
+  if (cameraShakePct > 6) {
+    environmental_warnings.push('לתוצאה מדויקת יותר, ייצב את המצלמה (חצובה/מחצמת) כדי למנוע רעידות.');
+  }
+  if (exposureBoostFrames > sampleCount * 0.22) {
+    environmental_warnings.push('התאורה בסרטון קיצונית (חשוך או בוהק מדי) — תאורה אחידה קדימה תשפר זיהוי מפרקים.');
+  }
+  if ((camera_view === 'front' || camera_view === 'angled') && ['pullup','chinup','row','seatedrowmachine','latpulldown'].includes(exKey)) {
+    environmental_warnings.push('לניתוח צדדי מדויק יותר במשיכות, מומלץ צילום מ-¾ או צד ולא ישר מול המצלמה.');
+  }
+  if (idleLeadSec >= 1.25) {
+    environmental_warnings.push('זוהתה המתה לפני תחילת התנועה — מדדי TUT ויציבות מחושבים מהרגע שהסט באמת התחיל.');
+  }
+  const envDedup = [];
+  for (const w of environmental_warnings) {
+    const s = String(w || '').trim();
+    if (s && !envDedup.includes(s)) envDedup.push(s);
+  }
   return {
     estimated_reps_cv: reps,
     estimated_reps_cv_calibrated: repsCalibrated,
@@ -2803,9 +2904,12 @@ async function extractPoseMetrics(file, exercise, options){
     control_tempo_score: controlTempoScore,
     power_explosiveness_score: explosivenessScore,
     visibility_score: Number(visibilityScore.toFixed(3)),
-    visibility_penalty_pct: Number(visibilityPenaltyPct.toFixed(1)),
+    visibility_penalty_pct: 0,
     visibility_note: visibilityNote,
-    visibility_penalty_applied: Number(visibilityPenaltyPct.toFixed(1)) + '%',
+    visibility_penalty_applied: '0%',
+    environmental_warnings: envDedup,
+    idle_trim_sec: Number(idleLeadSec.toFixed(2)),
+    analyzed_duration_sec: Number(mainResult.analyzed_duration_sec),
     inferred_joints: Array.from(inferredJointSet),
     missing_joints: Array.from(missingJointSet),
     rom_degrees: Math.round(mainResult.rom),
@@ -2826,11 +2930,20 @@ async function extractPoseMetrics(file, exercise, options){
     ,combo_pull_muscleup: comboPullMuscleup
     ,time_under_tension_sec: mainResult.tut_sec
     ,velocity_loss_pct: mainResult.velocity_loss_pct
-    ,rpe_estimate: Number((Math.min(10, Math.max(5, 5 + (mainResult.velocity_loss_pct / 10) + (mainResult.tut_sec / Math.max(8, duration || 8))))).toFixed(1))
+    ,rpe_estimate: Number((Math.min(10, Math.max(5, 5 + (mainResult.velocity_loss_pct / 10) + (mainResult.tut_sec / Math.max(8, trimmedWallSec || 8))))).toFixed(1))
     ,fatigue_flag: mainResult.velocity_loss_pct >= 20
     ,shoulder_imbalance: Number(meanFinite(shoulderAsym).toFixed(4))
     ,pelvic_tilt_asymmetry: Number(meanFinite(pelvicTiltAbs).toFixed(4))
     ,bar_path_efficiency: Number((100 - Math.min(45, stdFinite(barPathTrail.map(p=>p.x))*1000)).toFixed(1))
+    ,pose_frames_for_scoring: {
+      timestamps_ms: signalTs.slice(),
+      left_elbow_deg: leftElbowAngles.slice(),
+      right_elbow_deg: rightElbowAngles.slice(),
+      left_knee_deg: leftKneeAngles.slice(),
+      right_knee_deg: rightKneeAngles.slice(),
+      wrist_mid_y: posFrames.map(p => (p && Number.isFinite(p.wristY) ? p.wristY : NaN)),
+      shoulder_mid_y: posFrames.map(p => (p && Number.isFinite(p.shoulderY) ? p.shoulderY : NaN))
+    }
   };
 }
 
@@ -2895,18 +3008,6 @@ function calibrateFinalScore(rawScore, objectiveMetrics, summaryText, totalReps)
   if (Number.isFinite(conf) && conf < 0.45) {
     base -= 4;
     applyDelta('ביטחון זיהוי חזרות נמוך', -4);
-  }
-  const visibilityPenalty = Number(objectiveMetrics && objectiveMetrics.visibility_penalty_pct);
-  const visibilityScore = Number(objectiveMetrics && objectiveMetrics.visibility_score);
-  if (Number.isFinite(visibilityPenalty) && visibilityPenalty > 0) {
-    base -= visibilityPenalty;
-    applyDelta(
-      'איכות צילום/זווית',
-      -visibilityPenalty,
-      Number.isFinite(visibilityScore) && visibilityScore < 0.75
-        ? 'חלק מהגוף היה מחוץ לפריים ולכן הדיוק הביומכני ירד מעט.'
-        : undefined
-    );
   }
 
   // Penalize/boost according to textual quality cues.
@@ -3113,9 +3214,37 @@ function calibrateFinalScore(rawScore, objectiveMetrics, summaryText, totalReps)
   return finalScore;
 }
 
+function buildDeterministicBreakdown(finalScore, sub, weights) {
+  const wr = Number(weights.rom) || 0.4;
+  const ws = Number(weights.symmetry) || 0.3;
+  const wt = Number(weights.tempo) || 0.3;
+  const sum = wr + ws + wt || 1;
+  const labels = { rom: 'ROM', symmetry: 'Symmetry', tempo: 'Control / Tempo' };
+  const out = [];
+  for (const key of ['rom', 'symmetry', 'tempo']) {
+    const cur = Number(sub[key]);
+    if (!Number.isFinite(cur)) continue;
+    const gap = Math.max(0, 100 - cur);
+    if (gap < 2) continue;
+    const wKey = key === 'rom' ? wr : key === 'symmetry' ? ws : wt;
+    const delta = -Math.max(1, Math.min(42, Math.round((gap * wKey) / sum)));
+    out.push({
+      label: labels[key],
+      delta,
+      reason: 'מרכיב בציון המחושב אוטומטית מזוויות המפרקים והקצב.'
+    });
+  }
+  return out;
+}
+
 function sanitizeAnalysisData(d){
   const out = d && typeof d === 'object' ? {...d} : {};
-  out.score = Number.isFinite(Number(out.score)) ? Math.max(0, Math.min(100, Number(out.score))) : 70;
+  const om0 = out.objective_metrics && typeof out.objective_metrics === 'object' ? out.objective_metrics : {};
+  const deterministicRaw = Number(om0.deterministic_biomechanical_score);
+  const deterministicScoreLocked = Number.isFinite(deterministicRaw) && deterministicRaw >= 0 && deterministicRaw <= 100;
+  out.score = deterministicScoreLocked
+    ? Math.max(0, Math.min(100, Math.round(deterministicRaw)))
+    : (Number.isFinite(Number(out.score)) ? Math.max(0, Math.min(100, Number(out.score))) : 70);
   out.grade = cleanText(out.grade || 'בינוני');
   out.summary = removeRepMentions(cleanText(out.summary || 'לא התקבל סיכום מלא. נסה להריץ שוב.'));
   out.total_reps = Number.isFinite(Number(out.total_reps)) ? Number(out.total_reps) :
@@ -3133,6 +3262,9 @@ function sanitizeAnalysisData(d){
     desc: removeRepMentions(cleanText(f && f.desc ? f.desc : 'אין פירוט נוסף.')),
     impact: cleanText(f && f.impact ? f.impact : '')
   })) : [];
+  out.environmental_warnings = Array.isArray(out.environmental_warnings)
+    ? [...new Set(out.environmental_warnings.map(e => String(e == null ? '' : e).trim()).filter(Boolean))]
+    : [];
   const forbiddenDiagnosisRegex = /אסימטריה|scapular depression/i;
   const baseCueCatalog = {
     tension: { label: 'מתח גוף כולל (Total Body Tension)', cue: 'תכווץ הכל יחד: בטן, ישבן ורגליים. תחשוב "Squeeze everything".' },
@@ -3335,6 +3467,14 @@ function sanitizeAnalysisData(d){
   out.muscles.secondary = Array.isArray(out.muscles.secondary) ? out.muscles.secondary.map(cleanText).filter(Boolean) : [];
   out.muscles.stabilizers = Array.isArray(out.muscles.stabilizers) ? out.muscles.stabilizers.map(cleanText).filter(Boolean) : [];
   out.objective_metrics = out.objective_metrics && typeof out.objective_metrics === 'object' ? out.objective_metrics : {};
+  out.objective_metrics.visibility_penalty_pct = 0;
+  out.objective_metrics.visibility_penalty_applied = '0%';
+  if (Array.isArray(out.objective_metrics.environmental_warnings)) {
+    for (const w of out.objective_metrics.environmental_warnings) {
+      const s = String(w || '').trim();
+      if (s && !out.environmental_warnings.includes(s)) out.environmental_warnings.push(s);
+    }
+  }
   const confidenceMeta = getConfidenceMeta(out.objective_metrics);
   const exKey = String(selEx || '').toLowerCase();
   const dText = String(out.detected_exercise || '').toLowerCase();
@@ -3399,10 +3539,13 @@ function sanitizeAnalysisData(d){
     });
   }
   const tutCurrent = Number(out.objective_metrics.time_under_tension_sec);
-  const analyzedDuration = Number(out.objective_metrics.analyzed_duration_sec);
-  if (Number.isFinite(analyzedDuration) && analyzedDuration > 0) {
-    // TUT integrity: span from first movement to last lockout, never shorter than analyzed set.
-    out.objective_metrics.time_under_tension_sec = Number(Math.max(Number.isFinite(tutCurrent) ? tutCurrent : 0, analyzedDuration).toFixed(2));
+  if (Number.isFinite(tutCurrent) && tutCurrent > 0) {
+    out.objective_metrics.time_under_tension_sec = Number(tutCurrent.toFixed(2));
+  } else {
+    const analyzedDuration = Number(out.objective_metrics.analyzed_duration_sec);
+    if (Number.isFinite(analyzedDuration) && analyzedDuration > 0) {
+      out.objective_metrics.time_under_tension_sec = Number(analyzedDuration.toFixed(2));
+    }
   }
   const muscleUpByCV = !!out.objective_metrics.likely_muscleup;
   const kinematicUncertain = !!out.objective_metrics.exercise_uncertain || Number(out.objective_metrics.kinematic_confidence || 0) < 0.42;
@@ -3484,9 +3627,11 @@ function sanitizeAnalysisData(d){
   }
   // Hard anti-placeholder rule: if model returns generic mid score, force objective-based score.
   const suspiciousPlaceholder = Number(out.score) === 77 || /placeholder|בסיסי|נדחה זמנית/.test(String(out.summary || '').toLowerCase()) || kinematicUncertain;
-  if (suspiciousPlaceholder && Number.isFinite(Number(out.objective_metrics.objective_form_score))) {
+  if (!deterministicScoreLocked && suspiciousPlaceholder && Number.isFinite(Number(out.objective_metrics.objective_form_score))) {
     out.score = Math.max(25, Math.min(98, Math.round(Number(out.objective_metrics.objective_form_score))));
   }
+  const filmingFixTitle = /^(איכות צילום|זווית צילום|נראות צילום|רעידות מצלמה)/i;
+  out.fixes = (out.fixes || []).filter(f => !(f && f.type === 'bad' && filmingFixTitle.test(String(f.title || '').trim())));
   const shoulderImbalance = Number(out.objective_metrics.shoulder_imbalance);
   const pelvicTiltAsym = Number(out.objective_metrics.pelvic_tilt_asymmetry);
   const velocityLoss = Number(out.objective_metrics.velocity_loss_pct);
@@ -3497,14 +3642,9 @@ function sanitizeAnalysisData(d){
   const visibilityScore = Number(out.objective_metrics.visibility_score);
   const cameraShakePct = Number(out.objective_metrics.camera_shake_pct);
   if (!Number.isFinite(cameraShakePct)) out.objective_metrics.camera_shake_pct = 0;
-  if (!Number.isFinite(Number(out.objective_metrics.visibility_penalty_pct))) {
-    out.objective_metrics.visibility_penalty_pct = visibilityScore >= 0.9 ? 0
-      : visibilityScore >= 0.75 ? 2
-      : visibilityScore >= 0.6 ? 5
-      : 8;
-  }
+  out.objective_metrics.visibility_penalty_pct = 0;
   if (!out.objective_metrics.visibility_note && Number.isFinite(visibilityScore) && visibilityScore < 0.75) {
-    out.objective_metrics.visibility_note = 'הניתוח בוצע, אך חלק מהגוף מחוץ לפריים - זה עלול להשפיע על דיוק הציון.';
+    out.objective_metrics.visibility_note = 'חלק מהגוף פחות נראה בפריים — ההנחיות למטה ב״המלצות לאימון הבא״ מיועדות לשיפור צילום בלבד ולא משנות את הציון הביומכני.';
   }
   const cameraTilted = (Number(out.objective_metrics.camera_shake_pct || 0) > 8) || !!out.objective_metrics.camera_tilted || !!out.objective_metrics.camera_low_angle;
   const cameraPerspectiveDistorted = cameraTilted || cameraView === 'angled' || (Number.isFinite(kinematicConf) && kinematicConf < 0.58);
@@ -3517,20 +3657,12 @@ function sanitizeAnalysisData(d){
     });
   } else if (cameraPerspectiveDistorted && (looksLikePull || looksLikePress)) {
     out.fixes = out.fixes.filter(f => !/אסימטר|סימטר|שמאל|ימין|scapular depression/i.test(String((f && f.title) || '') + ' ' + String((f && f.desc) || '')));
-    out.fixes.unshift({
-      type: 'good',
-      title: 'זווית צילום',
-      desc: 'המצלמה קצת נמוכה ועקומה, קשה לי לראות אם הביצוע סימטרי. לתוצאה מדויקת, צלם שוב מגובה החזה כשהמצלמה ישרה.',
-      impact: 'דיוק גבוה יותר'
-    });
+    const camMsg = 'לתוצאה מדויקת יותר, צלם מגובה מותן באור מלא כשהמצלמה ישרה — הציון הביומכני לא מושפע מזווית הצילום.';
+    if (!out.environmental_warnings.includes(camMsg)) out.environmental_warnings.push(camMsg);
   }
   if (Number.isFinite(visibilityScore) && visibilityScore < 0.75) {
-    out.fixes.unshift({
-      type: 'bad',
-      title: 'איכות צילום/זווית',
-      desc: String(out.objective_metrics.visibility_note || 'חלק מהגוף לא נראה ברור בפריים - מומלץ צילום צד מלא בגובה החזה.'),
-      impact: '-' + String(Number(out.objective_metrics.visibility_penalty_pct || 0).toFixed(1)) + '%'
-    });
+    const visMsg = String(out.objective_metrics.visibility_note || 'לתוצאה מדויקת יותר, הרחב פריים או התקרב למצלמה בתאורה אחידה.');
+    if (!out.environmental_warnings.includes(visMsg)) out.environmental_warnings.push(visMsg);
   }
   if (Number.isFinite(pelvicTiltAsym) && pelvicTiltAsym > 0.025) {
     out.fixes.unshift({
@@ -3615,9 +3747,17 @@ function sanitizeAnalysisData(d){
       }
     }
   }
+  if (out.environmental_warnings.length) {
+    const envIntro = 'שיפור צילום והסביבה (לא משפיע על הציון הביומכני):';
+    if (!recommendations.includes(envIntro)) recommendations.push(envIntro);
+    for (const w of out.environmental_warnings) {
+      const line = String(w || '').trim();
+      if (line && !recommendations.includes(line)) recommendations.push(line);
+    }
+  }
   out.recommendations = recommendations;
   if (confidenceMeta.key !== 'high') {
-    const disclaimer = 'הצילום מעט רועד, לכן הפידבק משוער. לתוצאה מדויקת יותר, נסה לייצב את המצלמה.';
+    const disclaimer = 'הצילום מעט רועד — לפידבק ויזואלי מדויק יותר, נסה לייצב את המצלמה (לא משפיע על הציון הביומכני).';
     out.recommendations = [disclaimer, ...out.recommendations.filter(line => line !== disclaimer)];
   }
   out.tips = out.recommendations.join('\n');
@@ -3635,7 +3775,17 @@ function sanitizeAnalysisData(d){
       impact: '-0%'
     });
   }
-  out.score = calibrateFinalScore(out.score, out.objective_metrics, out.summary, out.total_reps);
+  if (!deterministicScoreLocked) {
+    out.score = calibrateFinalScore(out.score, out.objective_metrics, out.summary, out.total_reps);
+  } else {
+    const sub = om0.deterministic_subscores;
+    const wobj = om0.deterministic_score_breakdown && om0.deterministic_score_breakdown.weights;
+    if (sub && typeof sub === 'object' && wobj && typeof wobj === 'object') {
+      lastScoreBreakdown = buildDeterministicBreakdown(out.score, sub, wobj);
+    } else {
+      lastScoreBreakdown = [];
+    }
+  }
   const score = Number(out.score || 0);
   const scoreDrivenSummary = (s) => {
     if (s >= 90) return 'ביצוע חזק מאוד. עוד נעילה קטנה ואתה על סט מושלם.';
@@ -3665,6 +3815,7 @@ function sanitizeAnalysisData(d){
     });
   }
   out.grade = out.score >= 86 ? 'מצוין' : out.score >= 75 ? 'טוב' : out.score >= 60 ? 'בינוני' : 'נדרש שיפור';
+  out.objective_metrics.environmental_warnings = [...out.environmental_warnings];
   // Phase 1/2: ensure every fix row carries fault_id for progress + LLM audit (bad defaults to GENERIC when missing).
   out.fixes = (out.fixes || []).map(f => {
     const fid = String((f && f.fault_id) || '').trim();
@@ -3690,34 +3841,33 @@ function mapUserError(message){
 
 function buildMobileFallbackAnalysis(poseMetrics, cause){
   const m = poseMetrics && typeof poseMetrics === 'object' ? poseMetrics : {};
+  const detF = Number(m.deterministic_biomechanical_score);
   const stability = Number(m.stability_score);
   const symmetry = Number(m.symmetry_score);
   const vis = Number(m.visibility_score);
   const tempoMs = Number(m.avg_rep_tempo_ms);
-  const rom = Number(m.rom_score);
+  const rom = Number.isFinite(Number(m.rom_score))
+    ? Number(m.rom_score)
+    : (Number.isFinite(Number(m.rom_degrees)) ? Math.min(100, Number(m.rom_degrees)) : NaN);
   const reps = Math.max(1, Number(m.estimated_reps_cv_calibrated || m.estimated_reps_cv || 1));
   const baseScore =
-    (Number.isFinite(stability) ? stability * 0.34 : 22) +
-    (Number.isFinite(symmetry) ? symmetry * 0.28 : 18) +
-    (Number.isFinite(rom) ? rom * 0.20 : 14) +
-    (Number.isFinite(vis) ? (Math.min(1, Math.max(0, vis)) * 100) * 0.18 : 16);
-  const score = Math.max(45, Math.min(92, Math.round(baseScore)));
+    (Number.isFinite(stability) ? stability * 0.40 : 26) +
+    (Number.isFinite(symmetry) ? symmetry * 0.33 : 21) +
+    (Number.isFinite(rom) ? Math.min(100, rom) * 0.27 : 17);
+  const score = (Number.isFinite(detF) && detF >= 0 && detF <= 100)
+    ? Math.round(detF)
+    : Math.max(45, Math.min(92, Math.round(baseScore)));
   const grade = score >= 86 ? 'מצוין' : score >= 75 ? 'טוב' : score >= 60 ? 'בינוני' : 'נדרש שיפור';
   const hasLowVisibility = Number.isFinite(vis) && vis < 0.7;
   const hasTempoIssue = Number.isFinite(tempoMs) && (tempoMs < 900 || tempoMs > 4200);
+  const environmental_warnings = (Array.isArray(m.environmental_warnings) ? m.environmental_warnings.slice() : []);
+  if (hasLowVisibility) {
+    environmental_warnings.push('לתוצאה מדויקת יותר, צלם בפריים מלא ובתאורה אחידה (הציון כאן מבוסס ביומכניקה בלבד).');
+  }
   const summary = hasLowVisibility
-    ? 'בוצע ניתוח מובייל עמיד לעומס. התקבלו מדדי תנועה חלקיים ולכן ההערכה שמרנית. לשיפור דיוק: צילום קרוב יותר ותאורה חזקה.'
+    ? 'בוצע ניתוח מובייל עמיד לעומס. התקבלו מדדי תנועה חלקיים; הציון מבוסס על יציבות, סימטריה ו-ROM — שפר צילום רק לדיוק עתידי.'
     : 'בוצע ניתוח מובייל עמיד לעומס עם דגש על יציבות, סימטריה וטווח תנועה. התוצאה חושבה ממדדי תנועה אובייקטיביים מקומיים.';
   const fixes = [];
-  if (hasLowVisibility) {
-    fixes.push({
-      type: 'bad',
-      fault_id: 'GENERIC_FORM_FAULT',
-      title: 'נראות צילום נמוכה',
-      desc: 'התקרב מעט למצלמה, שמור את כל הגוף בפריים, והוסף אור חזיתי.',
-      impact: '-8%'
-    });
-  }
   if (hasTempoIssue) {
     fixes.push({
       type: 'bad',
@@ -3742,10 +3892,12 @@ function buildMobileFallbackAnalysis(poseMetrics, cause){
     impact: '-3%'
   });
   const noteCause = cleanText(String(cause || ''));
+  const envOut = [...new Set(environmental_warnings.map(s => String(s || '').trim()).filter(Boolean))];
   return {
     detected_exercise: (EX[selEx] && EX[selEx].n) || 'זיהוי אוטומטי',
     score,
     grade,
+    environmental_warnings: envOut,
     estimated_reps: reps,
     good_reps: Math.max(1, Math.round(reps * (score / 100))),
     summary: summary + (noteCause ? (' (Fallback: ' + noteCause + ')') : ''),
@@ -4443,7 +4595,7 @@ function assertFullBiomechanicalAnalysis(parsed, poseMetrics){
     p.objective_metrics = p.objective_metrics && typeof p.objective_metrics === 'object' ? p.objective_metrics : {};
     p.objective_metrics.analysis_partial = true;
     p.objective_metrics.analysis_partial_reasons = criticalMissing;
-    p.objective_metrics.visibility_note = p.objective_metrics.visibility_note || 'הניתוח בוצע עם מדדים חלקיים - הדיוק עלול להיות נמוך מהרגיל.';
+    p.objective_metrics.visibility_note = p.objective_metrics.visibility_note || 'הניתוח בוצע עם מדדים חלקיים — הציון נשאר לפי מה שנמדד; לדיוק עתידי שפר צילום ותאורה.';
   }
 }
 
@@ -4711,8 +4863,9 @@ async function analyze(){
       poseMetrics = {
         pose_unavailable: true,
         visibility_score: 0,
-        visibility_penalty_pct: 8,
-        visibility_note: 'מנוע Pose לא זמין כרגע. הניתוח בוצע עם הסתמכות גבוהה יותר על הווידאו והמודל.',
+        visibility_penalty_pct: 0,
+        visibility_note: 'מנוע Pose לא זמין כרגע. הניתוח ממשיך לפי הווידאו והמודל; הציון הביומכני לא מושפע מכך.',
+        environmental_warnings: ['לתוצאה מדויקת יותר, הפעל ניתוח Pose או צלם בפריים מלא באור אחיד.'],
         inferred_joints: [],
         missing_joints: ['all_pose_landmarks']
       };
@@ -4961,6 +5114,7 @@ async function callGemini(file, poseMetrics){
   const ex=EX[selEx];
   // Phase 2: load kinesiology knowledge graph from Node (GET /api/exercise-registry/:key) for prompt injection.
   let kinesiologyRegistryBlock = '';
+  let registryExerciseCached = null;
   if (selEx && typeof fetch === 'function') {
     try {
       const regUrl = apiUrl('/api/exercise-registry/' + encodeURIComponent(selEx));
@@ -4968,6 +5122,7 @@ async function callGemini(file, poseMetrics){
       if (regRes && regRes.ok) {
         const regJson = await regRes.json().catch(() => null);
         if (regJson && regJson.ok && regJson.exercise) {
+          registryExerciseCached = regJson.exercise;
           kinesiologyRegistryBlock = formatKinesiologyRegistryForPrompt(regJson.exercise);
         }
       }
@@ -4975,6 +5130,36 @@ async function callGemini(file, poseMetrics){
       /* static hosting / offline — prompt falls back to legacy rules */
     }
   }
+  let deterministicBundle = { finalScore: null, breakdown: {}, rom: NaN, symmetry: NaN, tempo: NaN };
+  if (poseMetrics && typeof poseMetrics === 'object' && window.TrainIQScoringEngine && typeof window.TrainIQScoringEngine.calculateBiomechanicalScore === 'function') {
+    const series = poseMetrics.pose_frames_for_scoring;
+    if (series && registryExerciseCached && registryExerciseCached.scoring_rules) {
+      deterministicBundle = window.TrainIQScoringEngine.calculateBiomechanicalScore(series, selEx, registryExerciseCached);
+      if (Number.isFinite(deterministicBundle.finalScore)) {
+        poseMetrics.deterministic_biomechanical_score = deterministicBundle.finalScore;
+        poseMetrics.deterministic_score_breakdown = deterministicBundle.breakdown;
+        poseMetrics.deterministic_subscores = {
+          rom: deterministicBundle.rom,
+          symmetry: deterministicBundle.symmetry,
+          tempo: deterministicBundle.tempo
+        };
+      }
+    }
+  }
+  const deterministicScoreRule = Number.isFinite(deterministicBundle && deterministicBundle.finalScore)
+    ? ('\n\n=== SYSTEM INSTRUCTION — Deterministic score (mandatory) ===\n' +
+      'The user\'s biomechanical score has been mathematically calculated as ' +
+      deterministicBundle.finalScore +
+      '/100. DO NOT invent a different overall score. Omit JSON fields "score" and "grade" entirely. ' +
+      'Return ONLY: detected_exercise, combo_detected, combo_flow, estimated_reps, good_reps, summary, muscles, reps, fixes, environmental_warnings, tips. ' +
+      'Align summary, fixes, and tips strictly with this ' + deterministicBundle.finalScore + '/100. ' +
+      'Sub-scores: ROM≈' + Math.round(deterministicBundle.rom) + ', Symmetry≈' + Math.round(deterministicBundle.symmetry) + ', Control/Tempo≈' + Math.round(deterministicBundle.tempo) + '.\n')
+    : '';
+  const metricsForLlm = (() => {
+    const o = poseMetrics && typeof poseMetrics === 'object' ? { ...poseMetrics } : {};
+    delete o.pose_frames_for_scoring;
+    return o;
+  })();
   const kinesiologyGraphRule = kinesiologyRegistryBlock
     ? (
         '\n\n=== TrainIQ Exercise Registry (חובה — Data-Driven) ===\n' +
@@ -4987,12 +5172,13 @@ async function callGemini(file, poseMetrics){
         '- שדות muscles.primary/secondary/stabilizers חייבים להיות עקביים עם תפקידי האנטומיה מה-registry (אותם שרירים/תפקידים; ניסוח עברית מותאם לווידאו).\n'
       )
     : '';
-  const metricsText = poseMetrics ? JSON.stringify(poseMetrics) : '{"notice":"pose metrics unavailable"}';
+  const metricsText =
+    deterministicScoreRule +
+    (Object.keys(metricsForLlm).length ? JSON.stringify(metricsForLlm) : '{"notice":"pose metrics unavailable"}');
   const visibilityScore = Number(poseMetrics && poseMetrics.visibility_score);
-  const visibilityPenalty = Number(poseMetrics && poseMetrics.visibility_penalty_pct);
   const cameraShakePct = Number(poseMetrics && poseMetrics.camera_shake_pct);
   const visibilityContextRule = Number.isFinite(visibilityScore)
-    ? ('\nכלל נראות צילום (חובה): visibility_score=' + visibilityScore.toFixed(2) + ', visibility_penalty_pct=' + (Number.isFinite(visibilityPenalty) ? visibilityPenalty.toFixed(1) : '0.0') + '. אם visibility_score נמוך מ-0.75, הוסף בהערות אזהרה קצרה: "הניתוח בוצע, אך חלק מהגוף מחוץ לפריים וזה עלול להשפיע על דיוק הציון."')
+    ? ('\nכלל נראות צילום (חובה): visibility_score=' + visibilityScore.toFixed(2) + '. בעיות צילום/תאורה/זווית — רק כהמלצות בשדה environmental_warnings (מערך מחרוזות בעברית). אסור לנסח שם כאילו הצילום משנה את הציון המספרי; הציון נקבע במדדים האובייקטיביים.')
     : '';
   const antiHallucinationCameraRule = Number.isFinite(cameraShakePct)
     ? ('\nכלל רעידות מצלמה (חובה): camera_shake_pct=' + cameraShakePct.toFixed(1) + '. אם הערך 0, אסור לציין רעידות מצלמה או תאורה חלשה כגורם שגיאה.')
@@ -5027,12 +5213,12 @@ async function callGemini(file, poseMetrics){
   const calisthenicsBiomechRule = calisthenicsKeys.has(selEx)
     ? '\n- Calisthenics line-tension Rule: explicitly connect shoulders + scapular rhythm + trunk stiffness to force transmission; avoid generic "core" bullets without a visible mechanism.'
     : '';
-  const prompt = 'אתה מאמן כוח ותנאה (S&C) ברמת Master Coach, מומחה לביומכניקה, פיזיולוגיה ואנטומיה פונקציונלית — לא תבנית משפטים. צפה בסרטון הוידאו של תרגיל: '+ex.n+' ('+ex.en+').\n\nמקטע לניתוח בלבד (חובה): שניות '+analysisWindow.startSec.toFixed(1)+' עד '+analysisWindow.endSec.toFixed(1)+'. אין להסיק מסקנות מחוץ לחלון זמן זה.\n\nמטרתך: ניתוח מדויק, עקבי ומקצועי ככל האפשר.\n\nמדדי תנועה אובייקטיביים שחושבו מראש מניתוח מפרקים (השתמש בהם כחיזוק, ואם יש סתירה קלה מול הוידאו – הוידאו קובע):\n'+metricsText+'\n\nבדיקות חובה:\n1. טווח תנועה מלא, זוויות מפרקים וסטיות מסוכנות.\n2. קצב אקסצנטרי/קונצנטרי ושליטה בתנועה.\n3. יציבות שלד וקינמטיקה (ליבה/אגן/שכמות) רק בהקשר לעומס בתרגיל — ברכיים/צוואר כשחשוף בפריים.\n4. סימני פיצוי ועומס אפשרי על מפרקים.\n5. זיהוי קומבו תרגילים: אם יש מעבר Muscle-up -> Dips -> Pull-up (או דומה), התייחס לקומבו ולא ככשל.\n6. הסבר מקצועי במונחים: רוטציה פנימית/חיצונית (Internal/External Rotation), הטיית אגן (Pelvic Tilt), יציבות שכמות (Scapular Stability) כאשר רלוונטי.\n\nכללי דומיין (חובה):\n- Allowed domains only: Gym training and Calisthenics.\n- Combat/Martial contexts are forbidden (Muay Thai, Kickboxing, Striking, Knee Strike).\n\nכללי פלט:\n- התחל בזיהוי תרגיל ברור בתוך detected_exercise.\n- הפלט כולו בעברית בלבד.\n- באנגלית מותר להשתמש רק בתוך סוגריים של מונחים אנטומיים/ביומכניים.\n- ללא תווים משובשים.\n- אל תנחש מידע שלא נראה בסרטון.\n- אין לציין כלל מספר חזרות בטקסטים החופשיים (summary / notes / desc).\n- בתרגילים מתפרצים (Muscle Up/Clean) לא להעניש על מומנטום טכני נדרש; להעריך יעילות מעבר ונעילה.\n- אם זוהה ROM מלא ותנועה טובה, אל תחזיר ציון מתחת 85 אלא אם יש סיכון בטיחותי חמור.\n- כל מונח אנטומי בפורמט: עברית (English).\n- בכל bad fix כתוב הוראה ישירה בעברית בלי קידומות מקצועיות.\n- ליבה/אגן: רק אם יש אינדיקציה וידאואית; חובה להסביר מנגנון (למשל בהרמה מעל הראש: ניטרוליות מותנית, ribs down מול הרחבת מותנית, העברת כוח). אסור משפט ליבה גנרי. אם הבעיה במרפקים/מסלול — עדיף cue מנח מרפקים (Elbow stacking).\n- לתרגילי משקל גוף הדגש גוף קשיח ויציבות שכמות; לתרגילי חדר כושר הדגש מסלול משקל וקצב; ובמכונה הדגש בידוד ומתיחה.\n- אל תציע לפתוח אחיזה אם האחיזה כבר ברוחב כתפיים או יותר.' + userChoiceLockRule + seatedStrictRule + '\n\nהחזר JSON בלבד:\n{\n  "detected_exercise": "<שם תרגיל מזוהה>",\n  "combo_detected": <true/false>,\n  "combo_flow": ["<תרגיל 1>", "<תרגיל 2>"],\n  "score": <0-100>,\n  "grade": "<מצוין/טוב/בינוני/נדרש שיפור>",\n  "estimated_reps": <מספר חזרות שזוהו אוטומטית>,\n  "good_reps": <חזרות עם טכניקה תקינה>,\n  "summary": "<2-4 משפטים מקצועיים ברורים ללא מספר חזרות>",\n  "muscles": {\n    "primary": ["<agonists — מניעים עיקריים של התרגיל הזה>"],\n    "secondary": ["<synergists — מסייעים לאותו מומנט>"],\n    "stabilizers": ["<stabilizers — מונעים דליפות כוח/שלד, לדוגמה ליבה-אגן תחת overhead>"]\n  },\n  "reps": [\n    {"rep": 1, "score": <0-100>, "note": "<מה היה טוב ומה לא טוב בחזרה זו, ללא מספר חזרות>"}\n  ],\n  "fixes": [\n    {"type": "bad", "fault_id": "<מזהה מהקטלוג למטה — UPPERCASE; אם אין התאמה: GENERIC_FORM_FAULT>", "title": "<מה לתקן>", "desc": "<הוראה ישירה בעברית>", "impact": "-X%"},\n    {"type": "good", "fault_id": "", "title": "<מה טוב>", "desc": "<הסבר מדויק ללא מספר חזרות>", "impact": "+X%"}\n  ],\n  "tips": "<3-5 המלצות פרקטיות, כל המלצה בשורה חדשה>"\n}';
+  const prompt = 'אתה מאמן כוח ותנאה (S&C) ברמת Master Coach, מומחה לביומכניקה, פיזיולוגיה ואנטומיה פונקציונלית — לא תבנית משפטים. צפה בסרטון הוידאו של תרגיל: '+ex.n+' ('+ex.en+').\n\nמקטע לניתוח בלבד (חובה): שניות '+analysisWindow.startSec.toFixed(1)+' עד '+analysisWindow.endSec.toFixed(1)+'. אין להסיק מסקנות מחוץ לחלון זמן זה.\n\nמטרתך: ניתוח מדויק, עקבי ומקצועי ככל האפשר.\n\nמדדי תנועה אובייקטיביים שחושבו מראש מניתוח מפרקים (השתמש בהם כחיזוק, ואם יש סתירה קלה מול הוידאו – הוידאו קובע):\n'+metricsText+'\n\nבדיקות חובה:\n1. טווח תנועה מלא, זוויות מפרקים וסטיות מסוכנות.\n2. קצב אקסצנטרי/קונצנטרי ושליטה בתנועה.\n3. יציבות שלד וקינמטיקה (ליבה/אגן/שכמות) רק בהקשר לעומס בתרגיל — ברכיים/צוואר כשחשוף בפריים.\n4. סימני פיצוי ועומס אפשרי על מפרקים.\n5. זיהוי קומבו תרגילים: אם יש מעבר Muscle-up -> Dips -> Pull-up (או דומה), התייחס לקומבו ולא ככשל.\n6. הסבר מקצועי במונחים: רוטציה פנימית/חיצונית (Internal/External Rotation), הטיית אגן (Pelvic Tilt), יציבות שכמות (Scapular Stability) כאשר רלוונטי.\n\nכללי דומיין (חובה):\n- Allowed domains only: Gym training and Calisthenics.\n- Combat/Martial contexts are forbidden (Muay Thai, Kickboxing, Striking, Knee Strike).\n\nכללי פלט:\n- התחל בזיהוי תרגיל ברור בתוך detected_exercise.\n- הפלט כולו בעברית בלבד.\n- באנגלית מותר להשתמש רק בתוך סוגריים של מונחים אנטומיים/ביומכניים.\n- ללא תווים משובשים.\n- אל תנחש מידע שלא נראה בסרטון.\n- אין לציין כלל מספר חזרות בטקסטים החופשיים (summary / notes / desc).\n- בתרגילים מתפרצים (Muscle Up/Clean) לא להעניש על מומנטום טכני נדרש; להעריך יעילות מעבר ונעילה.\n- הציון הסופי המספרי נקבע מחוץ למודל (מנוע מתמטי); תאר בלבד איך הביצוע מתיישב עם הציון שמופיע במדדים.\n- כל מונח אנטומי בפורמט: עברית (English).\n- בכל bad fix כתוב הוראה ישירה בעברית בלי קידומות מקצועיות.\n- ליבה/אגן: רק אם יש אינדיקציה וידאואית; חובה להסביר מנגנון (למשל בהרמה מעל הראש: ניטרוליות מותנית, ribs down מול הרחבת מותנית, העברת כוח). אסור משפט ליבה גנרי. אם הבעיה במרפקים/מסלול — עדיף cue מנח מרפקים (Elbow stacking).\n- לתרגילי משקל גוף הדגש גוף קשיח ויציבות שכמות; לתרגילי חדר כושר הדגש מסלול משקל וקצב; ובמכונה הדגש בידוד ומתיחה.\n- אל תציע לפתוח אחיזה אם האחיזה כבר ברוחב כתפיים או יותר.\n- חובה שדה JSON environmental_warnings: מערך מחרוזות בעברית לבעיות צילום/תאורה/פריים/ייצוב מצלמה בלבד (או [] ריק). אסור שפריטים שם יישמעו כמו הורדת ציון — הציון נקבע רק במדדים האובייקטיביים; בעיות טכניקה אמיתיות רק ב-fixes.' + userChoiceLockRule + seatedStrictRule + '\n\nהחזר JSON בלבד:\n{\n  "detected_exercise": "<שם תרגיל מזוהה>",\n  "combo_detected": <true/false>,\n  "combo_flow": ["<תרגיל 1>", "<תרגיל 2>"],\n  "estimated_reps": <מספר חזרות שזוהו אוטומטית>,\n  "good_reps": <חזרות עם טכניקה תקינה>,\n  "summary": "<2-4 משפטים מקצועיים ברורים ללא מספר חזרות>",\n  "muscles": {\n    "primary": ["<agonists — מניעים עיקריים של התרגיל הזה>"],\n    "secondary": ["<synergists — מסייעים לאותו מומנט>"],\n    "stabilizers": ["<stabilizers — מונעים דליפות כוח/שלד, לדוגמה ליבה-אגן תחת overhead>"]\n  },\n  "reps": [\n    {"rep": 1, "score": <0-100>, "note": "<מה היה טוב ומה לא טוב בחזרה זו, ללא מספר חזרות>"}\n  ],\n  "fixes": [\n    {"type": "bad", "fault_id": "<מזהה מהקטלוג למטה — UPPERCASE; אם אין התאמה: GENERIC_FORM_FAULT>", "title": "<מה לתקן>", "desc": "<הוראה ישירה בעברית>", "impact": "-X%"},\n    {"type": "good", "fault_id": "", "title": "<מה טוב>", "desc": "<הסבר מדויק ללא מספר חזרות>", "impact": "+X%"}\n  ],\n  "environmental_warnings": ["<אופציונלי: משפט בעברית על תאורה/זווית/פריים/ייצוב מצלמה בלבד — לא משפיע על score>"],\n  "tips": "<3-5 המלצות פרקטיות, כל המלצה בשורה חדשה>"\n}';
   const promptFinal = kinesiologyGraphRule
     ? prompt.replace('\n\nהחזר JSON בלבד:\n', kinesiologyGraphRule + '\n\nהחזר JSON בלבד:\n')
     : prompt;
   const compactMobilePromptBase =
-    'מאמן כוח ותנאה (Master S&C). נתח את התרגיל לפי וידאו/פריימים ומדדי Pose. muscles: primary=agonists, secondary=synergists, stabilizers=anti-leak (ללא כפילויות). ליבה רק עם מנגנון ספציפי לתרגיל. החזר JSON בלבד בפורמט המבוקש עם detected_exercise, score, grade, muscles, fixes (כולל fault_id), tips. אל תנחש, עברית בלבד, מונחים אנטומיים באנגלית רק בסוגריים. Metrics: ' +
+    'מאמן כוח ותנאה (Master S&C). נתח את התרגיל לפי וידאו/פריימים ומדדי Pose. muscles: primary=agonists, secondary=synergists, stabilizers=anti-leak (ללא כפילויות). ליבה רק עם מנגנון ספציפי לתרגיל. החזר JSON בלבד בפורמט המבוקש עם detected_exercise, muscles, fixes (כולל fault_id), environmental_warnings (מערך מחרוזות — רק צילום/תאורה/פריים, או []), tips — בלי שדות score ו-grade. אל תנחש, עברית בלבד, מונחים אנטומיים באנגלית רק בסוגריים. Metrics: ' +
     metricsText +
     userChoiceLockRule;
   const compactMobilePrompt = compactMobilePromptBase + (kinesiologyGraphRule ? kinesiologyGraphRule + '\n' : '');
@@ -5598,6 +5784,28 @@ function anatomyLineForMuscle(name){
   return dualMuscleLabel(n) + ': שריר פעיל בתרגיל לפי הדפוס התנועתי שנצפה.';
 }
 
+function parseFixImpactPct(s){
+  const m = String(s || '').match(/-?\d+(?:\.\d+)?/);
+  return m ? Number(m[0]) : 0;
+}
+
+/** One-cue rule: single worst bad fix (by impact %) or first good. */
+function extractPrimaryFocus(fixesArray){
+  const arr = Array.isArray(fixesArray) ? fixesArray.slice() : [];
+  const bads = arr.filter(f => f && f.type === 'bad');
+  if (bads.length) {
+    bads.sort((a, b) => parseFixImpactPct(a && a.impact) - parseFixImpactPct(b && b.impact));
+    const primary = bads[0];
+    return { primary, secondary: arr.filter(f => f !== primary) };
+  }
+  const goods = arr.filter(f => f && f.type === 'good');
+  if (goods.length) {
+    const primary = goods[0];
+    return { primary, secondary: arr.filter(f => f !== primary) };
+  }
+  return { primary: null, secondary: arr };
+}
+
 function render(d){
   const forbiddenDiagnosisRegex = /אסימטריה|scapular depression/i;
   const removedBad = Array.isArray(d && d.fixes)
@@ -5606,6 +5814,10 @@ function render(d){
   d = d && typeof d === 'object' ? { ...d } : {};
   d.summary = String(d.summary || '').replace(/אסימטריה|scapular depression/ig, 'יציבות').replace(/\s{2,}/g, ' ').trim();
   d.fixes = (Array.isArray(d.fixes) ? d.fixes : []).filter(f => !forbiddenDiagnosisRegex.test(String((f && f.title) || '') + ' ' + String((f && f.desc) || '')));
+  d.fixes = d.fixes.filter(f => {
+    const t = String((f && f.title) || '').trim();
+    return !/^(איכות צילום|זווית צילום|נראות צילום|רעידות מצלמה)/i.test(t);
+  });
   d.recommendations = (Array.isArray(d.recommendations) ? d.recommendations : []).filter(line => !forbiddenDiagnosisRegex.test(String(line || '')));
   d.tips = String(d.tips || '').split('\n').map(s=>s.trim()).filter(Boolean).filter(line => !forbiddenDiagnosisRegex.test(line)).join('\n');
   if (removedBad > 0 && !d.fixes.some(f => /יציבות כללית/.test(String((f && f.title) || '')))) {
@@ -5668,7 +5880,25 @@ function render(d){
     '<div><strong>מייצבים:</strong> '+formatGroup(muscles.stabilizers||[])+'</div>' + anatomyHtml;
   updateResultAnatomyByAnalysis(d);
 
-  document.getElementById('fix-list').innerHTML=(d.fixes||[]).map(f=>
+  const focusParts = extractPrimaryFocus(d.fixes);
+  const focusWrap = document.getElementById('next-set-focus-wrap');
+  if (focusWrap) {
+    const p = focusParts.primary;
+    if (p) {
+      const col = p.type === 'bad' ? 'var(--red)' : 'var(--green)';
+      focusWrap.innerHTML =
+        '<div class="next-set-focus-card" role="region" aria-label="הפוקוס לסט הבא">' +
+        '<div class="next-set-focus-kicker">🎯 הפוקוס לסט הבא</div>' +
+        '<div class="next-set-focus-title" style="color:' + col + '">' + p.title + '</div>' +
+        '<div class="next-set-focus-body">' + p.desc + '</div>' +
+        (p.impact ? '<div class="next-set-focus-impact">' + p.impact + '</div>' : '') +
+        '</div>';
+    } else {
+      focusWrap.innerHTML = '';
+    }
+  }
+
+  document.getElementById('fix-list').innerHTML=(focusParts.secondary||[]).map(f=>
     '<div class="fix-item">'+
     '<div class="fix-ico '+f.type+'">'+(f.type==='bad'?'!':'V')+'</div>'+
     '<div>'+
@@ -5678,7 +5908,9 @@ function render(d){
     '</div></div>').join('');
   const cueEl = document.getElementById('phone-main-cue');
   if (cueEl) {
-    const topBad = (d.fixes || []).find(f => f && f.type === 'bad');
+    const topBad = (focusParts.primary && focusParts.primary.type === 'bad')
+      ? focusParts.primary
+      : (d.fixes || []).find(f => f && f.type === 'bad');
     cueEl.textContent = topBad ? ('הערה מרכזית: ' + cleanText(topBad.title || topBad.desc || 'שמור על טכניקה יציבה בכל החזרות.')) : 'הערה מרכזית: טכניקה יציבה. שמור על קצב אחיד עד סוף הסט.';
     cueEl.classList.toggle('show', IS_MOBILE_DEVICE);
   }
