@@ -1164,6 +1164,23 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // --- TrainIQ: serve kinesiology exercise registry (knowledge graph) for LLM prompt injection ---
+  if (req.method === 'GET' && reqPath.startsWith('/api/exercise-registry/')) {
+    const rawKey = reqPath.slice('/api/exercise-registry/'.length);
+    const key = decodeURIComponent(String(rawKey || '').trim().toLowerCase());
+    if (!key) {
+      sendJson(res, 400, { ok: false, error: 'Missing exercise key' });
+      return;
+    }
+    const exercise = getExercise(key);
+    if (!exercise) {
+      sendJson(res, 404, { ok: false, error: 'Unknown exercise key', key });
+      return;
+    }
+    sendJson(res, 200, { ok: true, exercise });
+    return;
+  }
+
   if (req.method === 'GET' && reqPath === '/api/progress') {
     const db = readUsersDb();
     const username = getSessionUsername(db, getBearerToken(req));
