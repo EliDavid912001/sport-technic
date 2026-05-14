@@ -305,6 +305,41 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 .auth-legacy-fields{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
 .progress-wrap{margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
 .progress-wrap h4{font-size:13px;margin-bottom:8px;color:var(--muted);font-weight:700}
+.pp-open-btn{
+  font-family:'Heebo',sans-serif;font-size:12px;font-weight:800;padding:8px 14px;border-radius:12px;cursor:pointer;border:1px solid rgba(34,197,94,0.45);
+  background:linear-gradient(135deg,rgba(34,197,94,0.22),rgba(52,211,153,0.12));color:#d8ffe8;
+  box-shadow:0 6px 18px rgba(0,0,0,0.25);transition:transform .15s,border-color .15s
+}
+.pp-open-btn:hover{transform:translateY(-1px);border-color:rgba(52,211,153,0.65)}
+.pp-modal{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(5,6,10,0.72);backdrop-filter:blur(10px)}
+.pp-modal.show{display:flex}
+.pp-modal-panel{
+  width:min(960px,100%);max-height:min(92vh,900px);overflow:auto;border-radius:20px;
+  background:linear-gradient(165deg,rgba(20,24,32,0.94),rgba(10,12,18,0.98));
+  border:1px solid rgba(255,255,255,0.1);box-shadow:0 28px 60px rgba(0,0,0,0.55)
+}
+.pp-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border)}
+.pp-modal-title{font-size:16px;font-weight:900;background:linear-gradient(135deg,#fff 20%,var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.pp-modal-close{
+  border:none;background:rgba(255,255,255,0.06);color:var(--text);width:36px;height:36px;border-radius:10px;cursor:pointer;font-size:18px;line-height:1
+}
+.pp-modal-body{padding:16px 18px 22px}
+.pp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media(max-width:720px){.pp-grid{grid-template-columns:1fr}}
+.pp-glass{
+  border-radius:14px;padding:10px 12px;border:1px solid rgba(255,255,255,0.08);
+  background:rgba(10,14,20,0.55);backdrop-filter:blur(8px)
+}
+.pp-glass h5{font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:800}
+.pp-chart-h{height:180px;position:relative}
+.pp-faults{margin-top:14px}
+.pp-faults h5{font-size:12px;font-weight:800;color:var(--muted);margin-bottom:8px}
+.pp-fault-pill{
+  display:inline-flex;align-items:center;gap:8px;margin:4px 6px 4px 0;padding:6px 10px;border-radius:999px;
+  font-size:11px;border:1px solid rgba(34,197,94,0.35);background:rgba(34,197,94,0.1);color:#d2fbe5
+}
+.pp-fault-count{font-weight:900;color:var(--green)}
+.pp-muted-note{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5}
 .progress-ex-select{width:100%;margin-bottom:10px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif}
 #progress-chart-wrap{position:relative;height:220px;margin-top:6px}
 .ex-anatomy{display:none!important}
@@ -918,6 +953,10 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
         <h4>גרף התקדמות לפי תרגיל (למשתמש מחובר)</h4>
         <select class="progress-ex-select" id="progress-exercise-select" onchange="loadProgressChart()"></select>
         <div id="progress-chart-wrap"><canvas id="progress-chart"></canvas></div>
+        <!-- Phase 3: entry point to premium personal progress dashboard (modal) -->
+        <div style="margin-top:12px">
+          <button type="button" class="pp-open-btn" onclick="openPersonalProgressModal()">התקדמות אישית</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1184,6 +1223,37 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 </div>
 <div class="toast" id="fun-toast"></div>
 
+<!-- Phase 3: Personal Progress modal (premium dashboard — fetches GET /api/progress) -->
+<div id="personal-progress-modal" class="pp-modal" role="dialog" aria-modal="true" aria-hidden="true" onclick="if(event.target===this)closePersonalProgressModal()">
+  <div class="pp-modal-panel" onclick="event.stopPropagation()">
+    <div class="pp-modal-head">
+      <div class="pp-modal-title">התקדמות אישית</div>
+      <button type="button" class="pp-modal-close" onclick="closePersonalProgressModal()" aria-label="סגור">×</button>
+    </div>
+    <div class="pp-modal-body">
+      <p class="pp-muted-note">נתונים מהשרת לפי התרגיל שנבחר למעלה. גרפים: ציון, TUT, יציבות; למטה — תקלות נפוצות מ-5 הניתוחים האחרונים.</p>
+      <div class="pp-grid">
+        <div class="pp-glass">
+          <h5>ציון לאורך זמן</h5>
+          <div class="pp-chart-h"><canvas id="pp-chart-score"></canvas></div>
+        </div>
+        <div class="pp-glass">
+          <h5>זמן תחת מתח (TUT)</h5>
+          <div class="pp-chart-h"><canvas id="pp-chart-tut"></canvas></div>
+        </div>
+        <div class="pp-glass">
+          <h5>יציבות</h5>
+          <div class="pp-chart-h"><canvas id="pp-chart-stability"></canvas></div>
+        </div>
+      </div>
+      <div class="pp-faults">
+        <h5>תקלות נפוצות (5 ניתוחים אחרונים)</h5>
+        <div id="pp-fault-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -1323,6 +1393,8 @@ let selEx=null, selFile=null, resData=null, detectedReps=null;
 let exerciseCategoryFilter = null;
 let userExplicitExerciseLock = false;
 let progressChartInstance = null;
+/** Phase 3: Chart.js instances inside the premium personal progress modal */
+let personalProgressCharts = { score: null, tut: null, stab: null };
 const CALISTHENICS_KEYS = new Set(['muscleup','pullover','pullup','chinup','dips','pushup']);
 let selectedTrimRange = { startSec: 0, endSec: 0, durationSec: 0 };
 let trimRenderToken = 0;
@@ -2738,6 +2810,7 @@ async function extractPoseMetrics(file, exercise, options){
     missing_joints: Array.from(missingJointSet),
     rom_degrees: Math.round(mainResult.rom),
     torso_stability_std: Number.isFinite(stability) ? Number(stability.toFixed(2)) : null,
+    stability_score: Number.isFinite(stabilityScore) ? Math.round(Math.max(0, Math.min(100, stabilityScore))) : null,
     objective_form_score: objective,
     cv_rep_scores: repScores,
     rep_count_confidence: Number(rep_count_confidence.toFixed(2))
@@ -3055,6 +3128,7 @@ function sanitizeAnalysisData(d){
   })) : [];
   out.fixes = Array.isArray(out.fixes) ? out.fixes.map(f=>({
     type: f && f.type === 'good' ? 'good' : 'bad',
+    fault_id: String(f && f.fault_id != null ? f.fault_id : '').trim(),
     title: cleanText(f && f.title ? f.title : (f && f.type === 'good' ? 'נקודה חיובית' : 'נקודה לשיפור')),
     desc: removeRepMentions(cleanText(f && f.desc ? f.desc : 'אין פירוט נוסף.')),
     impact: cleanText(f && f.impact ? f.impact : '')
@@ -3555,6 +3629,7 @@ function sanitizeAnalysisData(d){
   if (removedBadFixes > 0) {
     out.fixes.unshift({
       type: 'bad',
+      fault_id: 'GENERIC_FORM_FAULT',
       title: 'יציבות כללית',
       desc: 'שמור על יציבות לאורך כל הסט.',
       impact: '-0%'
@@ -3574,6 +3649,7 @@ function sanitizeAnalysisData(d){
   if (selEx === 'deadlift' && /גב עגול|round(ed)? back|lumbar flexion|קריסת גב/.test(String(out.summary || '').toLowerCase())) {
     out.fixes.unshift({
       type: 'bad',
+      fault_id: 'GENERIC_FORM_FAULT',
       title: 'אזהרת בטיחות גבוהה',
       desc: 'Spinal Safety: זוהתה קריסת גב בדדליפט - עצור, הורד עומס, וייצב ליבה לפני סט נוסף.',
       impact: '-18%'
@@ -3582,12 +3658,19 @@ function sanitizeAnalysisData(d){
   if (selEx === 'benchpress' && !out.fixes.some(f => /orange|תפוזים|מרפק/.test(String(f.desc || '').toLowerCase()))) {
     out.fixes.push({
       type: 'bad',
+      fault_id: 'BENCH_ELBOW_FLARE',
       title: 'Elbow Tuck',
       desc: 'מנח מרפקים: תחשוב שאתה מנסה למעוך תפוזים בבתי השחי.',
       impact: '-6%'
     });
   }
   out.grade = out.score >= 86 ? 'מצוין' : out.score >= 75 ? 'טוב' : out.score >= 60 ? 'בינוני' : 'נדרש שיפור';
+  // Phase 1/2: ensure every fix row carries fault_id for progress + LLM audit (bad defaults to GENERIC when missing).
+  out.fixes = (out.fixes || []).map(f => {
+    const fid = String((f && f.fault_id) || '').trim();
+    const isGood = f && f.type === 'good';
+    return Object.assign({}, f, { fault_id: fid || (isGood ? '' : 'GENERIC_FORM_FAULT') });
+  });
   return out;
 }
 
@@ -3629,6 +3712,7 @@ function buildMobileFallbackAnalysis(poseMetrics, cause){
   if (hasLowVisibility) {
     fixes.push({
       type: 'bad',
+      fault_id: 'GENERIC_FORM_FAULT',
       title: 'נראות צילום נמוכה',
       desc: 'התקרב מעט למצלמה, שמור את כל הגוף בפריים, והוסף אור חזיתי.',
       impact: '-8%'
@@ -3637,6 +3721,7 @@ function buildMobileFallbackAnalysis(poseMetrics, cause){
   if (hasTempoIssue) {
     fixes.push({
       type: 'bad',
+      fault_id: 'GENERIC_FORM_FAULT',
       title: 'קצב תנועה לא יציב',
       desc: 'שמור קצב אחיד: ירידה מבוקרת ועלייה חזקה בלי קפיצות.',
       impact: '-6%'
@@ -3644,12 +3729,14 @@ function buildMobileFallbackAnalysis(poseMetrics, cause){
   }
   fixes.push({
     type: 'bad',
+    fault_id: 'GENERIC_FORM_FAULT',
     title: 'ייצוב ליבה',
     desc: 'ייצוב ליבה (Core Stability): תחזיק את הבטן חזקה כאילו מישהו עומד לתת לך אגרוף.',
     impact: '-4%'
   });
   fixes.push({
     type: 'bad',
+    fault_id: 'GENERIC_FORM_FAULT',
     title: 'מנח מרפקים',
     desc: 'מנח מרפקים (Elbow Alignment): תחשוב שאתה מנסה למעוך תפוזים בבתי השחי.',
     impact: '-3%'
@@ -4728,7 +4815,7 @@ async function analyze(){
       assertStrictHardeningResult(d);
     }
     resData={d,ex:EX[selEx],file:(analysisFile && analysisFile.name) || selFile.name};
-    void saveProgressIfLoggedIn(d);
+    void saveProgressIfLoggedIn(d, d.user_chosen_exercise_key || selEx);
     updateProgressFlow(3,100);
     setTimeout(()=>{
       celebrateLoadingBoom();
@@ -4831,6 +4918,39 @@ async function pickAdaptiveFrameCount(file, analysisWindow){
   return Math.max(IS_MOBILE_DEVICE ? 8 : 14, Math.min(IS_MOBILE_DEVICE ? 12 : 24, byFps));
 }
 
+/**
+ * Phase 2: serialize exerciseRegistry payload for Gemini (anatomy + catalogued fault_ids).
+ * @param {object} exercise from GET /api/exercise-registry/:key
+ */
+function formatKinesiologyRegistryForPrompt(exercise){
+  if (!exercise || typeof exercise !== 'object') return '';
+  const meta = exercise.metadata || {};
+  const name = meta.name || {};
+  const lines = [];
+  lines.push('exercise_key: ' + String(exercise.key || ''));
+  lines.push('display_name_he: ' + String(name.he || ''));
+  lines.push('display_name_en: ' + String(name.en || ''));
+  lines.push('category: ' + String(meta.category || ''));
+  lines.push('mode: ' + String(meta.mode || ''));
+  lines.push('anatomy.primary (objects): ' + JSON.stringify((exercise.anatomy && exercise.anatomy.primary) || []));
+  lines.push('anatomy.secondary (objects): ' + JSON.stringify((exercise.anatomy && exercise.anatomy.secondary) || []));
+  lines.push('anatomy.stabilizers (objects): ' + JSON.stringify((exercise.anatomy && exercise.anatomy.stabilizers) || []));
+  const cues = Array.isArray(exercise.biomechanical_cues) ? exercise.biomechanical_cues : [];
+  lines.push('catalogued_faults:');
+  for (const c of cues) {
+    if (!c || !c.fault_id) continue;
+    lines.push(
+      '  - ' +
+        String(c.fault_id) +
+        ' | ' +
+        String(c.description || '').replace(/\n/g, ' ') +
+        ' | anatomical_consequence: ' +
+        String(c.anatomical_consequence || '').replace(/\n/g, ' ')
+    );
+  }
+  return lines.join('\n');
+}
+
 function isOverloadLikeError(message){
   const m = String(message || '').toLowerCase();
   return /high demand|try again later|429|503|queue|עומס|בתור|timeout/.test(m);
@@ -4839,6 +4959,34 @@ function isOverloadLikeError(message){
 async function callGemini(file, poseMetrics){
   const analysisWindow = getAnalysisWindow();
   const ex=EX[selEx];
+  // Phase 2: load kinesiology knowledge graph from Node (GET /api/exercise-registry/:key) for prompt injection.
+  let kinesiologyRegistryBlock = '';
+  if (selEx && typeof fetch === 'function') {
+    try {
+      const regUrl = apiUrl('/api/exercise-registry/' + encodeURIComponent(selEx));
+      const regRes = await fetch(regUrl, { method: 'GET', cache: 'no-store' });
+      if (regRes && regRes.ok) {
+        const regJson = await regRes.json().catch(() => null);
+        if (regJson && regJson.ok && regJson.exercise) {
+          kinesiologyRegistryBlock = formatKinesiologyRegistryForPrompt(regJson.exercise);
+        }
+      }
+    } catch (_) {
+      /* static hosting / offline — prompt falls back to legacy rules */
+    }
+  }
+  const kinesiologyGraphRule = kinesiologyRegistryBlock
+    ? (
+        '\n\n=== TrainIQ Exercise Registry (חובה — Data-Driven) ===\n' +
+        kinesiologyRegistryBlock +
+        '\n\nחוקי fault_id ב-fixes (חובה):\n' +
+        '- לכל איבר במערך "fixes" חובה שדה fault_id (מחרוזת).\n' +
+        '- type=bad: אם יש התאמה לתיאור מול catalogued_faults — השתמש ב-fault_id המדויק (UPPERCASE) כפי שמופיע למעלה. אם אין התאמה סבירה — השתמש ב-"GENERIC_FORM_FAULT" בלבד.\n' +
+        '- type=good: השאר fault_id כמחרוזת ריקה "" אלא אם יש התאמה מפורשת לקטלוג.\n' +
+        '- אסור להמציא fault_id שלא הופיע ב-catalogued_faults למעלה (למעט GENERIC_FORM_FAULT ל-bad).\n' +
+        '- שדות muscles.primary/secondary/stabilizers חייבים להיות עקביים עם תפקידי האנטומיה מה-registry (אותם שרירים/תפקידים; ניסוח עברית מותאם לווידאו).\n'
+      )
+    : '';
   const metricsText = poseMetrics ? JSON.stringify(poseMetrics) : '{"notice":"pose metrics unavailable"}';
   const visibilityScore = Number(poseMetrics && poseMetrics.visibility_score);
   const visibilityPenalty = Number(poseMetrics && poseMetrics.visibility_penalty_pct);
@@ -4879,8 +5027,15 @@ async function callGemini(file, poseMetrics){
   const calisthenicsBiomechRule = calisthenicsKeys.has(selEx)
     ? '\n- Calisthenics line-tension Rule: explicitly connect shoulders + scapular rhythm + trunk stiffness to force transmission; avoid generic "core" bullets without a visible mechanism.'
     : '';
-  const prompt = 'אתה מאמן כוח ותנאה (S&C) ברמת Master Coach, מומחה לביומכניקה, פיזיולוגיה ואנטומיה פונקציונלית — לא תבנית משפטים. צפה בסרטון הוידאו של תרגיל: '+ex.n+' ('+ex.en+').\n\nמקטע לניתוח בלבד (חובה): שניות '+analysisWindow.startSec.toFixed(1)+' עד '+analysisWindow.endSec.toFixed(1)+'. אין להסיק מסקנות מחוץ לחלון זמן זה.\n\nמטרתך: ניתוח מדויק, עקבי ומקצועי ככל האפשר.\n\nמדדי תנועה אובייקטיביים שחושבו מראש מניתוח מפרקים (השתמש בהם כחיזוק, ואם יש סתירה קלה מול הוידאו – הוידאו קובע):\n'+metricsText+'\n\nבדיקות חובה:\n1. טווח תנועה מלא, זוויות מפרקים וסטיות מסוכנות.\n2. קצב אקסצנטרי/קונצנטרי ושליטה בתנועה.\n3. יציבות שלד וקינמטיקה (ליבה/אגן/שכמות) רק בהקשר לעומס בתרגיל — ברכיים/צוואר כשחשוף בפריים.\n4. סימני פיצוי ועומס אפשרי על מפרקים.\n5. זיהוי קומבו תרגילים: אם יש מעבר Muscle-up -> Dips -> Pull-up (או דומה), התייחס לקומבו ולא ככשל.\n6. הסבר מקצועי במונחים: רוטציה פנימית/חיצונית (Internal/External Rotation), הטיית אגן (Pelvic Tilt), יציבות שכמות (Scapular Stability) כאשר רלוונטי.\n\nכללי דומיין (חובה):\n- Allowed domains only: Gym training and Calisthenics.\n- Combat/Martial contexts are forbidden (Muay Thai, Kickboxing, Striking, Knee Strike).\n\nכללי פלט:\n- התחל בזיהוי תרגיל ברור בתוך detected_exercise.\n- הפלט כולו בעברית בלבד.\n- באנגלית מותר להשתמש רק בתוך סוגריים של מונחים אנטומיים/ביומכניים.\n- ללא תווים משובשים.\n- אל תנחש מידע שלא נראה בסרטון.\n- אין לציין כלל מספר חזרות בטקסטים החופשיים (summary / notes / desc).\n- בתרגילים מתפרצים (Muscle Up/Clean) לא להעניש על מומנטום טכני נדרש; להעריך יעילות מעבר ונעילה.\n- אם זוהה ROM מלא ותנועה טובה, אל תחזיר ציון מתחת 85 אלא אם יש סיכון בטיחותי חמור.\n- כל מונח אנטומי בפורמט: עברית (English).\n- בכל bad fix כתוב הוראה ישירה בעברית בלי קידומות מקצועיות.\n- ליבה/אגן: רק אם יש אינדיקציה וידאואית; חובה להסביר מנגנון (למשל בהרמה מעל הראש: ניטרוליות מותנית, ribs down מול הרחבת מותנית, העברת כוח). אסור משפט ליבה גנרי. אם הבעיה במרפקים/מסלול — עדיף cue מנח מרפקים (Elbow stacking).\n- לתרגילי משקל גוף הדגש גוף קשיח ויציבות שכמות; לתרגילי חדר כושר הדגש מסלול משקל וקצב; ובמכונה הדגש בידוד ומתיחה.\n- אל תציע לפתוח אחיזה אם האחיזה כבר ברוחב כתפיים או יותר.' + userChoiceLockRule + seatedStrictRule + '\n\nהחזר JSON בלבד:\n{\n  "detected_exercise": "<שם תרגיל מזוהה>",\n  "combo_detected": <true/false>,\n  "combo_flow": ["<תרגיל 1>", "<תרגיל 2>"],\n  "score": <0-100>,\n  "grade": "<מצוין/טוב/בינוני/נדרש שיפור>",\n  "estimated_reps": <מספר חזרות שזוהו אוטומטית>,\n  "good_reps": <חזרות עם טכניקה תקינה>,\n  "summary": "<2-4 משפטים מקצועיים ברורים ללא מספר חזרות>",\n  "muscles": {\n    "primary": ["<agonists — מניעים עיקריים של התרגיל הזה>"],\n    "secondary": ["<synergists — מסייעים לאותו מומנט>"],\n    "stabilizers": ["<stabilizers — מונעים דליפות כוח/שלד, לדוגמה ליבה-אגן תחת overhead>"]\n  },\n  "reps": [\n    {"rep": 1, "score": <0-100>, "note": "<מה היה טוב ומה לא טוב בחזרה זו, ללא מספר חזרות>"}\n  ],\n  "fixes": [\n    {"type": "bad", "title": "<מה לתקן>", "desc": "<הוראה ישירה בעברית>", "impact": "-X%"},\n    {"type": "good", "title": "<מה טוב>", "desc": "<הסבר מדויק ללא מספר חזרות>", "impact": "+X%"}\n  ],\n  "tips": "<3-5 המלצות פרקטיות, כל המלצה בשורה חדשה>"\n}';
-  const compactMobilePrompt = 'מאמן כוח ותנאה (Master S&C). נתח את התרגיל לפי וידאו/פריימים ומדדי Pose. muscles: primary=agonists, secondary=synergists, stabilizers=anti-leak (ללא כפילויות). ליבה רק עם מנגנון ספציפי לתרגיל. החזר JSON בלבד בפורמט המבוקש עם detected_exercise, score, grade, muscles, fixes, tips. אל תנחש, עברית בלבד, מונחים אנטומיים באנגלית רק בסוגריים. Metrics: ' + metricsText + userChoiceLockRule;
+  const prompt = 'אתה מאמן כוח ותנאה (S&C) ברמת Master Coach, מומחה לביומכניקה, פיזיולוגיה ואנטומיה פונקציונלית — לא תבנית משפטים. צפה בסרטון הוידאו של תרגיל: '+ex.n+' ('+ex.en+').\n\nמקטע לניתוח בלבד (חובה): שניות '+analysisWindow.startSec.toFixed(1)+' עד '+analysisWindow.endSec.toFixed(1)+'. אין להסיק מסקנות מחוץ לחלון זמן זה.\n\nמטרתך: ניתוח מדויק, עקבי ומקצועי ככל האפשר.\n\nמדדי תנועה אובייקטיביים שחושבו מראש מניתוח מפרקים (השתמש בהם כחיזוק, ואם יש סתירה קלה מול הוידאו – הוידאו קובע):\n'+metricsText+'\n\nבדיקות חובה:\n1. טווח תנועה מלא, זוויות מפרקים וסטיות מסוכנות.\n2. קצב אקסצנטרי/קונצנטרי ושליטה בתנועה.\n3. יציבות שלד וקינמטיקה (ליבה/אגן/שכמות) רק בהקשר לעומס בתרגיל — ברכיים/צוואר כשחשוף בפריים.\n4. סימני פיצוי ועומס אפשרי על מפרקים.\n5. זיהוי קומבו תרגילים: אם יש מעבר Muscle-up -> Dips -> Pull-up (או דומה), התייחס לקומבו ולא ככשל.\n6. הסבר מקצועי במונחים: רוטציה פנימית/חיצונית (Internal/External Rotation), הטיית אגן (Pelvic Tilt), יציבות שכמות (Scapular Stability) כאשר רלוונטי.\n\nכללי דומיין (חובה):\n- Allowed domains only: Gym training and Calisthenics.\n- Combat/Martial contexts are forbidden (Muay Thai, Kickboxing, Striking, Knee Strike).\n\nכללי פלט:\n- התחל בזיהוי תרגיל ברור בתוך detected_exercise.\n- הפלט כולו בעברית בלבד.\n- באנגלית מותר להשתמש רק בתוך סוגריים של מונחים אנטומיים/ביומכניים.\n- ללא תווים משובשים.\n- אל תנחש מידע שלא נראה בסרטון.\n- אין לציין כלל מספר חזרות בטקסטים החופשיים (summary / notes / desc).\n- בתרגילים מתפרצים (Muscle Up/Clean) לא להעניש על מומנטום טכני נדרש; להעריך יעילות מעבר ונעילה.\n- אם זוהה ROM מלא ותנועה טובה, אל תחזיר ציון מתחת 85 אלא אם יש סיכון בטיחותי חמור.\n- כל מונח אנטומי בפורמט: עברית (English).\n- בכל bad fix כתוב הוראה ישירה בעברית בלי קידומות מקצועיות.\n- ליבה/אגן: רק אם יש אינדיקציה וידאואית; חובה להסביר מנגנון (למשל בהרמה מעל הראש: ניטרוליות מותנית, ribs down מול הרחבת מותנית, העברת כוח). אסור משפט ליבה גנרי. אם הבעיה במרפקים/מסלול — עדיף cue מנח מרפקים (Elbow stacking).\n- לתרגילי משקל גוף הדגש גוף קשיח ויציבות שכמות; לתרגילי חדר כושר הדגש מסלול משקל וקצב; ובמכונה הדגש בידוד ומתיחה.\n- אל תציע לפתוח אחיזה אם האחיזה כבר ברוחב כתפיים או יותר.' + userChoiceLockRule + seatedStrictRule + '\n\nהחזר JSON בלבד:\n{\n  "detected_exercise": "<שם תרגיל מזוהה>",\n  "combo_detected": <true/false>,\n  "combo_flow": ["<תרגיל 1>", "<תרגיל 2>"],\n  "score": <0-100>,\n  "grade": "<מצוין/טוב/בינוני/נדרש שיפור>",\n  "estimated_reps": <מספר חזרות שזוהו אוטומטית>,\n  "good_reps": <חזרות עם טכניקה תקינה>,\n  "summary": "<2-4 משפטים מקצועיים ברורים ללא מספר חזרות>",\n  "muscles": {\n    "primary": ["<agonists — מניעים עיקריים של התרגיל הזה>"],\n    "secondary": ["<synergists — מסייעים לאותו מומנט>"],\n    "stabilizers": ["<stabilizers — מונעים דליפות כוח/שלד, לדוגמה ליבה-אגן תחת overhead>"]\n  },\n  "reps": [\n    {"rep": 1, "score": <0-100>, "note": "<מה היה טוב ומה לא טוב בחזרה זו, ללא מספר חזרות>"}\n  ],\n  "fixes": [\n    {"type": "bad", "fault_id": "<מזהה מהקטלוג למטה — UPPERCASE; אם אין התאמה: GENERIC_FORM_FAULT>", "title": "<מה לתקן>", "desc": "<הוראה ישירה בעברית>", "impact": "-X%"},\n    {"type": "good", "fault_id": "", "title": "<מה טוב>", "desc": "<הסבר מדויק ללא מספר חזרות>", "impact": "+X%"}\n  ],\n  "tips": "<3-5 המלצות פרקטיות, כל המלצה בשורה חדשה>"\n}';
+  const promptFinal = kinesiologyGraphRule
+    ? prompt.replace('\n\nהחזר JSON בלבד:\n', kinesiologyGraphRule + '\n\nהחזר JSON בלבד:\n')
+    : prompt;
+  const compactMobilePromptBase =
+    'מאמן כוח ותנאה (Master S&C). נתח את התרגיל לפי וידאו/פריימים ומדדי Pose. muscles: primary=agonists, secondary=synergists, stabilizers=anti-leak (ללא כפילויות). ליבה רק עם מנגנון ספציפי לתרגיל. החזר JSON בלבד בפורמט המבוקש עם detected_exercise, score, grade, muscles, fixes (כולל fault_id), tips. אל תנחש, עברית בלבד, מונחים אנטומיים באנגלית רק בסוגריים. Metrics: ' +
+    metricsText +
+    userChoiceLockRule;
+  const compactMobilePrompt = compactMobilePromptBase + (kinesiologyGraphRule ? kinesiologyGraphRule + '\n' : '');
   const forceDirectionRule = '\nכלל כיוון כוח (חובה לפני סיווג):\n- אם המוט/ידית יורדים לכיוון החזה => משיכה (Pull: Lat Pulldown/Row).\n- אם המוט/ידיים עולים מהכתפיים למעלה => דחיקה (Push: Shoulder Press).\n';
   const uncertaintyRule = '\nבמצב חוסר ודאות: אל תחזיר ציון גנרי 72 או פידבק כללי. כתוב במפורש במה יש בלבול (למשל כיוון כוח/זווית מרפק/מסלול תנועה).\nכלל זווית מצלמה (חובה): אם זווית הצילום נמוכה/עקומה ומעוותת סימטריה, אסור לאבחן שמאל-ימין או אסימטריה. במקום אבחנה החזר: "המצלמה קצת נמוכה ועקומה, קשה לי לראות אם הביצוע סימטרי. לתוצאה מדויקת, צלם שוב מגובה החזה כשהמצלמה ישרה."\nבמצלמה בעייתית עדיין תן פוקוס על שני מדדים שנראים מכל זווית במתח: תלייה מלאה למטה (מרפקים ישרים) וסנטר מעל המוט למעלה.\n';
   let frames = [];
@@ -4900,7 +5055,7 @@ async function callGemini(file, poseMetrics){
   }
   const promptBody = IS_MOBILE_DEVICE
     ? (compactMobilePrompt + overheadTricepsRule + overheadSpecificRule + muscleUpSpecificRule + calisthenicsBiomechRule + masterCoachKnowledgeCompact + visibilityContextRule + antiHallucinationCameraRule)
-    : (prompt + overheadTricepsRule + overheadSpecificRule + muscleUpSpecificRule + calisthenicsBiomechRule + warriorToneRule + eliteTerminologyRule + masterCoachKnowledgeRule + forceDirectionRule + uncertaintyRule + visibilityContextRule + antiHallucinationCameraRule);
+    : (promptFinal + overheadTricepsRule + overheadSpecificRule + muscleUpSpecificRule + calisthenicsBiomechRule + warriorToneRule + eliteTerminologyRule + masterCoachKnowledgeRule + forceDirectionRule + uncertaintyRule + visibilityContextRule + antiHallucinationCameraRule);
   const parts=[{text: promptBody}];
   if (frames.length) {
     for (const frameB64 of frames) {
@@ -4922,7 +5077,7 @@ async function callGemini(file, poseMetrics){
   } catch (e) {
     if (!isOverloadLikeError(e && e.message)) throw e;
     // Anti-overload fallback: resend a much lighter request before failing user flow.
-    const rescueParts = [{text: (IS_MOBILE_DEVICE ? compactMobilePrompt : prompt) + overheadTricepsRule + overheadSpecificRule + muscleUpSpecificRule + calisthenicsBiomechRule + masterCoachKnowledgeCompact + visibilityContextRule + antiHallucinationCameraRule + '\nMode: low-payload rescue'}];
+    const rescueParts = [{text: (IS_MOBILE_DEVICE ? compactMobilePrompt : promptFinal) + overheadTricepsRule + overheadSpecificRule + muscleUpSpecificRule + calisthenicsBiomechRule + masterCoachKnowledgeCompact + visibilityContextRule + antiHallucinationCameraRule + '\nMode: low-payload rescue'}];
     try {
       const rescueFramesCount = Math.max(3, Math.min(6, Math.floor((frameCount || 8) * 0.5)));
       const rescueFrames = await getFrames(file, rescueFramesCount, analysisWindow, {
@@ -5846,6 +6001,8 @@ function refreshAuthUI(){
       progressChartInstance.destroy();
       progressChartInstance = null;
     }
+    destroyPersonalProgressCharts();
+    closePersonalProgressModal();
   }
   syncAuthGateVisibility();
 }
@@ -5892,11 +6049,219 @@ async function loadProgressChart(){
   } catch (_) {}
 }
 
-async function saveProgressIfLoggedIn(d){
+function destroyPersonalProgressCharts(){
+  ['score','tut','stab'].forEach(k => {
+    const c = personalProgressCharts[k];
+    if (c) {
+      try { c.destroy(); } catch (_) {}
+      personalProgressCharts[k] = null;
+    }
+  });
+}
+
+function openPersonalProgressModal(){
+  const modal = document.getElementById('personal-progress-modal');
+  if (!modal) return;
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden', 'false');
+  loadPersonalProgressDashboard();
+}
+
+function closePersonalProgressModal(){
+  const modal = document.getElementById('personal-progress-modal');
+  if (!modal) return;
+  modal.classList.remove('show');
+  modal.setAttribute('aria-hidden', 'true');
+  destroyPersonalProgressCharts();
+}
+
+/** Normalize GET /api/progress rows (legacy {at,score} or AnalysisRecord v1). */
+function unwrapProgressEntryForDashboard(e){
+  if (!e || typeof e !== 'object') return null;
+  const t = Number.isFinite(Number(e.timestamp))
+    ? Number(e.timestamp)
+    : (Number.isFinite(Number(e.at)) ? Number(e.at) : null);
+  if (t == null) return null;
+  const score = Number.isFinite(Number(e.final_score)) ? Number(e.final_score) : Number(e.score);
+  const m = e.metrics && typeof e.metrics === 'object' ? e.metrics : {};
+  const tut = Number(m.time_under_tension_sec);
+  let stab = Number(m.stability_score);
+  if (!Number.isFinite(stab)) {
+    const std = Number(m.torso_stability_std);
+    if (Number.isFinite(std)) stab = Math.max(0, Math.min(100, Math.round(100 - std * 12)));
+    else stab = null;
+  } else stab = Math.round(Math.max(0, Math.min(100, stab)));
+  const faults = Array.isArray(e.detected_faults) ? e.detected_faults.map(x => String(x || '').trim()).filter(Boolean) : [];
+  return {
+    t,
+    score: Number.isFinite(score) ? score : null,
+    tut: Number.isFinite(tut) ? Number(tut.toFixed(2)) : null,
+    stab: Number.isFinite(stab) ? stab : null,
+    faults
+  };
+}
+
+async function loadPersonalProgressDashboard(){
   const token = localStorage.getItem(AUTH_TOKEN_KEY);
-  if (!token || !selEx) return;
+  const sel = document.getElementById('progress-exercise-select');
+  if (!token || !sel || typeof Chart === 'undefined') return;
+  const key = sel.value;
+  const cScore = document.getElementById('pp-chart-score');
+  const cTut = document.getElementById('pp-chart-tut');
+  const cStab = document.getElementById('pp-chart-stability');
+  const faultHost = document.getElementById('pp-fault-list');
+  if (!cScore || !cTut || !cStab || !faultHost) return;
+  destroyPersonalProgressCharts();
+  try {
+    const r = await fetch(apiUrl('/api/progress') + '?exerciseKey=' + encodeURIComponent(key), {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return;
+    const entries = Array.isArray(j.entries) ? j.entries : [];
+    const rows = entries.map(unwrapProgressEntryForDashboard).filter(Boolean);
+    const labels = rows.map(row => new Date(row.t).toLocaleDateString('he-IL', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }));
+    const scores = rows.map(row => (Number.isFinite(row.score) ? row.score : null));
+    const tuts = rows.map(row => row.tut);
+    const stabs = rows.map(row => row.stab);
+
+    const neon = '#22c55e';
+    const mint = '#34d399';
+    const ice = 'rgba(148, 163, 184, 0.35)';
+
+    personalProgressCharts.score = new Chart(cScore, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'ציון סופי',
+          data: scores,
+          borderColor: neon,
+          backgroundColor: 'rgba(34,197,94,0.12)',
+          tension: 0.3,
+          fill: true,
+          spanGaps: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { min: 0, max: 100, grid: { color: ice }, ticks: { color: '#94a3b8' } }, x: { ticks: { color: '#94a3b8' }, grid: { color: ice } } }
+      }
+    });
+
+    personalProgressCharts.tut = new Chart(cTut, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'TUT (שניות)',
+          data: tuts,
+          borderColor: mint,
+          backgroundColor: 'rgba(52,211,153,0.1)',
+          tension: 0.3,
+          fill: true,
+          spanGaps: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { grid: { color: ice }, ticks: { color: '#94a3b8' } }, x: { ticks: { color: '#94a3b8' }, grid: { color: ice } } }
+      }
+    });
+
+    personalProgressCharts.stab = new Chart(cStab, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'יציבות (0–100)',
+          data: stabs,
+          borderColor: '#4ade80',
+          backgroundColor: 'rgba(74,222,128,0.1)',
+          tension: 0.3,
+          fill: true,
+          spanGaps: true
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { min: 0, max: 100, grid: { color: ice }, ticks: { color: '#94a3b8' } }, x: { ticks: { color: '#94a3b8' }, grid: { color: ice } } }
+      }
+    });
+
+    const recent = rows.slice(-5);
+    const freq = {};
+    for (const row of recent) {
+      for (const fid of row.faults) {
+        freq[fid] = (freq[fid] || 0) + 1;
+      }
+    }
+    const top = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    faultHost.innerHTML = top.length
+      ? top.map(([id, n]) => '<span class="pp-fault-pill"><code style="font-size:10px">' + id + '</code><span class="pp-fault-count">×' + n + '</span></span>').join('')
+      : '<span class="pp-muted-note" style="display:inline">אין fault_id שנשמרו בחמשת הניתוחים האחרונים (או עדיין אין היסטוריה).</span>';
+  } catch (_) {}
+}
+
+async function saveProgressIfLoggedIn(d, exerciseKeyOverride){
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  const exKey = String(exerciseKeyOverride || (d && d.user_chosen_exercise_key) || selEx || '').trim().toLowerCase();
+  if (!token || !exKey) return;
   const score = Number(d && d.score);
   if (!Number.isFinite(score)) return;
+  const om = (d && d.objective_metrics && typeof d.objective_metrics === 'object') ? d.objective_metrics : {};
+  const tut = Number(om.time_under_tension_sec);
+  const stabilityRaw = Number(om.stability_score);
+  const torsoStd = Number(om.torso_stability_std);
+  const stability_score = Number.isFinite(stabilityRaw)
+    ? Math.round(Math.max(0, Math.min(100, stabilityRaw)))
+    : (Number.isFinite(torsoStd) ? Math.max(0, Math.min(100, Math.round(100 - torsoStd * 12))) : null);
+  const time_under_tension_sec = Number.isFinite(tut) ? Number(tut.toFixed(2)) : null;
+  const reps_completed = (() => {
+    const n = Number(d.total_reps);
+    if (Number.isFinite(n)) return Math.round(n);
+    const cv = Number(om.estimated_reps_cv_calibrated || om.estimated_reps_cv);
+    return Number.isFinite(cv) ? Math.round(cv) : null;
+  })();
+  const fixes = Array.isArray(d && d.fixes) ? d.fixes : [];
+  const detected_faults = fixes
+    .filter(f => f && f.type === 'bad')
+    .map(f => String(f.fault_id || '').trim())
+    .filter(Boolean);
+  const positive_cues = fixes
+    .filter(f => f && f.type === 'good')
+    .map(f => {
+      const t = String(f.title || '').trim();
+      const desc = String(f.desc || '').trim();
+      if (t && desc && !desc.startsWith(t)) return t + ' — ' + desc;
+      return t || desc;
+    })
+    .filter(Boolean);
+  const body = {
+    exerciseKey: exKey,
+    score: Math.max(0, Math.min(100, Math.round(score))),
+    time_under_tension_sec,
+    stability_score,
+    reps_completed,
+    detected_faults: Array.isArray(detected_faults) ? detected_faults : [],
+    positive_cues: Array.isArray(positive_cues) ? positive_cues : [],
+    rpe_estimate: Number.isFinite(Number(om.rpe_estimate)) ? Number(om.rpe_estimate) : null,
+    analyzed_duration_sec: Number.isFinite(Number(om.analyzed_duration_sec)) ? Number(om.analyzed_duration_sec) : null,
+    objective_form_score: Number.isFinite(Number(om.objective_form_score)) ? Number(om.objective_form_score) : null,
+    objective_metrics: om,
+    llm_payload: {
+      detected_exercise: d && d.detected_exercise,
+      grade: d && d.grade,
+      summary: d && d.summary,
+      fixes: fixes
+    }
+  };
   try {
     await fetch(apiUrl('/api/progress'), {
       method: 'POST',
@@ -5904,9 +6269,12 @@ async function saveProgressIfLoggedIn(d){
         'Content-Type': 'application/json',
         Authorization: 'Bearer ' + token
       },
-      body: JSON.stringify({ exerciseKey: selEx, score })
+      body: JSON.stringify(body)
     });
     loadProgressChart();
+    if (document.getElementById('personal-progress-modal') && document.getElementById('personal-progress-modal').classList.contains('show')) {
+      loadPersonalProgressDashboard();
+    }
   } catch (_) {}
 }
 
