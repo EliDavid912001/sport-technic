@@ -641,6 +641,32 @@ const exerciseRegistry = {
         anatomical_consequence: 'עומס מסובבים וסימטריה לקויה של הכתף.'
       }
     ],
+    scoring_rules: {
+      weights: { rom: 0.4, symmetry: 0.35, tempo: 0.25 },
+      rom: {
+        bottom_elbow_flexion: {
+          joint: 'elbow_avg',
+          aggregate: 'max',
+          target: 100,
+          tolerance: 18,
+          direction: 'lower_better'
+        },
+        top_elbow_extension: {
+          joint: 'elbow_avg',
+          aggregate: 'min',
+          target: 166,
+          tolerance: 14,
+          direction: 'higher_better'
+        }
+      },
+      symmetry: { elbow_angle_mean_abs_diff_max: 10, knee_angle_mean_abs_diff_max: 22 },
+      tempo: {
+        y_series: 'wrist_mid_y',
+        eccentric_dy_positive: true,
+        max_norm_velocity_soft: 3.2,
+        max_norm_velocity_hard: 7
+      }
+    },
     runtime_params: runtimeParamsFor('benchpress'),
     cv_profile: cvProfile({
       category: 'free_movement',
@@ -1405,6 +1431,32 @@ const exerciseRegistry = {
         anatomical_consequence: 'העברת מומנט לכיפוף מותני.'
       }
     ],
+    scoring_rules: {
+      weights: { rom: 0.42, symmetry: 0.33, tempo: 0.25 },
+      rom: {
+        bottom_knee_flexion: {
+          joint: 'knee_avg',
+          aggregate: 'min',
+          target: 102,
+          tolerance: 22,
+          direction: 'lower_better'
+        },
+        top_knee_extension: {
+          joint: 'knee_avg',
+          aggregate: 'max',
+          target: 168,
+          tolerance: 14,
+          direction: 'higher_better'
+        }
+      },
+      symmetry: { elbow_angle_mean_abs_diff_max: 16, knee_angle_mean_abs_diff_max: 14 },
+      tempo: {
+        y_series: 'shoulder_mid_y',
+        eccentric_dy_positive: true,
+        max_norm_velocity_soft: 3.0,
+        max_norm_velocity_hard: 6.6
+      }
+    },
     runtime_params: runtimeParamsFor('squat'),
     cv_profile: cvProfile({
       category: 'free_movement',
