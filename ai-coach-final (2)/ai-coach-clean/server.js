@@ -7,6 +7,15 @@ const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
 
+// --- TrainIQ data layer (exercise registry + AnalysisRecord schema) ---
+const { exerciseCatalog } = require('./src/data/exerciseCatalog.js');
+const { getExercise, listCatalogForUi } = require('./src/data/exerciseRegistry.js');
+const {
+  createEmptyAnalysisRecord,
+  validateAnalysisRecord,
+  ANALYSIS_RECORD_VERSION
+} = require('./src/data/dbSchema.js');
+
 const warnedMissingEnvPaths = new Set();
 
 function parseEnvFile(envPath, opts) {
@@ -175,7 +184,7 @@ const circuitState = {
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
-  '.js': 'application/javascript',
+  '.js': 'application/javascript; charset=utf-8',
   '.css': 'text/css',
   '.json': 'application/json',
   '.glb': 'model/gltf-binary',
@@ -280,7 +289,7 @@ function buildOverloadFallbackText() {
         impact: '-0%'
       }
     ],
-    tips: 'נסה שוב בעוד כדקה לקבלת ניתוח מלא.\nמומלץ לצלם בזווית ברורה ובתאורה טובה.\nשמור על פריים יציב כדי לשפר דיוק בניסיון הבא.'
+    tips: 'נסה שוב בעוד כדקה לקבלת ניתוח מלא.\nשמור שליטה באקסצנטרי ובקונצנטרי חזק.\nנעול ליבה לאורך כל הסט.'
   });
 }
 
@@ -302,6 +311,13 @@ function isCircuitOpen() {
 
 function makeCacheKey(parts) {
   return crypto.createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+}
+
+function shouldSkipAnalysisCache(req) {
+  const runId = String((req && req.headers && req.headers['x-analysis-run-id']) || '').trim();
+  if (runId.length > 0) return true;
+  const cc = String((req && req.headers && req.headers['cache-control']) || '').toLowerCase();
+  return cc.includes('no-store') || cc.includes('no-cache');
 }
 
 function getCachedResult(cacheKey) {
@@ -582,7 +598,7 @@ async function requestSingleAnalysis(parts) {
       lastErrorMessage: 'Gemini circuit is temporarily open'
     };
   }
-  let lastErrorMessage = 'שגיאה מ-Gemini';
+  let lastErrorMessage = 'שגיאה במנוע TrainIQ — נסה שוב בעוד רגע';
   let lastStatusCode = 500;
   const isTransientMessage = msg => /high demand|try again later|temporar|timeout|overloaded/i.test(msg || '');
   const totalAttempts = Math.max(MAX_GEMINI_RETRIES, MIN_TRANSIENT_RETRIES);
@@ -684,15 +700,19 @@ async function requestSingleAnalysis(parts) {
   return { ok: false, lastStatusCode, lastErrorMessage };
 }
 
-async function runAnalysis(parts) {
-  const cacheKey = makeCacheKey(parts);
-  const cached = getCachedResult(cacheKey);
-  if (cached) {
-    return { ok: true, payload: { text: cached, cached: true, passes: 0 } };
+async function runAnalysis(parts, options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const skipCache = !!opts.skipCache;
+  if (!skipCache) {
+    const cacheKey = makeCacheKey(parts);
+    const cached = getCachedResult(cacheKey);
+    if (cached) {
+      return { ok: true, payload: { text: cached, cached: true, passes: 0 } };
+    }
   }
 
   const successfulTexts = [];
-  let lastErrorMessage = 'שגיאה מ-Gemini';
+  let lastErrorMessage = 'שגיאה במנוע TrainIQ — נסה שוב בעוד רגע';
   let lastStatusCode = 500;
 
   for (let pass = 1; pass <= CONSISTENCY_PASSES; pass++) {
@@ -713,7 +733,10 @@ async function runAnalysis(parts) {
     } catch (_) {
       textToReturn = successfulTexts[0];
     }
-    setCachedResult(cacheKey, textToReturn);
+    if (!skipCache) {
+      const cacheKey = makeCacheKey(parts);
+      setCachedResult(cacheKey, textToReturn);
+    }
     return { ok: true, payload: { text: textToReturn, passes: successfulTexts.length } };
   }
 
@@ -732,7 +755,8 @@ async function runAnalysis(parts) {
   return { ok: false, lastStatusCode, lastErrorMessage };
 }
 
-function createJob(parts) {
+function createJob(parts, options) {
+  const opts = options && typeof options === 'object' ? options : {};
   const id = crypto.randomUUID();
   const job = {
     id,
@@ -741,7 +765,8 @@ function createJob(parts) {
     maxAttempts: 1 + JOB_MAX_TRANSIENT_RETRIES,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    parts
+    parts,
+    skipCache: !!opts.skipCache
   };
   analysisJobs.set(id, job);
   analysisQueue.push(id);
@@ -766,7 +791,7 @@ async function processJob(job) {
   job.status = 'running';
   job.attempts = Number(job.attempts || 0) + 1;
   job.updatedAt = Date.now();
-  const result = await runAnalysis(job.parts);
+  const result = await runAnalysis(job.parts, { skipCache: !!job.skipCache });
   if (result.ok) {
     job.status = 'done';
     job.result = result.payload;
@@ -875,6 +900,172 @@ function pruneSessions(db) {
 
 const ANALYSIS_HISTORY_JSON = path.join(__dirname, 'data', 'analysis_history.json');
 
+/** @param {unknown} v @param {number} [max] */
+function sanitizeStringArray(v, max) {
+  const cap = Math.max(0, Math.min(80, Number(max) || 48));
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const item of v) {
+    const s = String(item == null ? '' : item).trim();
+    if (!s) continue;
+    out.push(s);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/** Prefer first finite number among candidates; otherwise null. */
+function coalesceFiniteNumber(...candidates) {
+  for (const c of candidates) {
+    const n = Number(c);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/**
+ * Maps POST /api/progress JSON into a partial AnalysisRecord (merged later via createEmptyAnalysisRecord).
+ * Replaces legacy-only { at, score } payloads with a rich, schema-aligned row.
+ *
+ * @param {Record<string, unknown>} parsed
+ * @param {string} username normalized session user (used as user_id)
+ */
+function buildAnalysisRecordPartialFromBody(parsed, username) {
+  const exerciseKey = String(parsed.exerciseKey || '').trim().toLowerCase();
+  const scoreRaw = Number(parsed.score);
+  const finalScore = Math.max(0, Math.min(100, Math.round(scoreRaw)));
+  const analysisId =
+    String(parsed.analysis_id || parsed.analysisId || '').trim() || crypto.randomUUID();
+  const ts = coalesceFiniteNumber(parsed.timestamp, parsed.at) || Date.now();
+  const metricsIn = parsed.metrics && typeof parsed.metrics === 'object' ? parsed.metrics : {};
+
+  const time_under_tension_sec = coalesceFiniteNumber(
+    parsed.time_under_tension_sec,
+    metricsIn.time_under_tension_sec
+  );
+  const stability_score = coalesceFiniteNumber(
+    parsed.stability_score,
+    metricsIn.stability_score
+  );
+  const reps_completed = coalesceFiniteNumber(
+    parsed.reps_completed,
+    metricsIn.reps_completed,
+    parsed.total_reps,
+    metricsIn.estimated_reps_cv
+  );
+  const rpe_estimate = coalesceFiniteNumber(parsed.rpe_estimate, metricsIn.rpe_estimate);
+  const analyzed_duration_sec = coalesceFiniteNumber(
+    parsed.analyzed_duration_sec,
+    metricsIn.analyzed_duration_sec
+  );
+  const objective_form_score = coalesceFiniteNumber(
+    parsed.objective_form_score,
+    metricsIn.objective_form_score
+  );
+
+  const detected_faults = sanitizeStringArray(parsed.detected_faults, 40);
+  const positive_cues = sanitizeStringArray(parsed.positive_cues, 48);
+
+  const llm_payload =
+    parsed.llm_payload && typeof parsed.llm_payload === 'object' ? parsed.llm_payload : undefined;
+  const objective_metrics =
+    parsed.objective_metrics && typeof parsed.objective_metrics === 'object'
+      ? parsed.objective_metrics
+      : undefined;
+
+  return {
+    analysis_id: analysisId,
+    user_id: username,
+    exercise_key: exerciseKey,
+    timestamp: ts,
+    final_score: finalScore,
+    metrics: {
+      time_under_tension_sec,
+      stability_score,
+      reps_completed,
+      rpe_estimate,
+      analyzed_duration_sec,
+      objective_form_score
+    },
+    detected_faults,
+    positive_cues,
+    llm_payload,
+    objective_metrics
+  };
+}
+
+/** Minimal valid row if extended body fails schema validation. */
+function buildFallbackAnalysisRecordPartial(username, exerciseKey, finalScore) {
+  return {
+    analysis_id: crypto.randomUUID(),
+    user_id: username,
+    exercise_key: exerciseKey,
+    timestamp: Date.now(),
+    final_score: Math.max(0, Math.min(100, Math.round(finalScore))),
+    metrics: {
+      time_under_tension_sec: null,
+      stability_score: null,
+      reps_completed: null,
+      rpe_estimate: null,
+      analyzed_duration_sec: null,
+      objective_form_score: null
+    },
+    detected_faults: [],
+    positive_cues: []
+  };
+}
+
+/**
+ * Normalize stored progress rows for clients that still expect { at, score } (e.g. Chart.js).
+ * New rows are full AnalysisRecord objects; legacy rows stay as-is.
+ */
+function mapProgressEntryForClient(entry) {
+  if (
+    entry &&
+    typeof entry === 'object' &&
+    Number(entry.schema_version) === ANALYSIS_RECORD_VERSION &&
+    Number.isFinite(Number(entry.timestamp))
+  ) {
+    return Object.assign({}, entry, {
+      at: entry.timestamp,
+      score: entry.final_score
+    });
+  }
+  return entry;
+}
+
+/**
+ * REPLACE: previously pushed raw `{ at, username, exerciseKey, score }` blobs.
+ * Now persists a validated AnalysisRecord (full document) per entry.
+ *
+ * @param {Record<string, unknown>} partialPayload fields merged via createEmptyAnalysisRecord
+ * @returns {{ ok: true, record: object } | { ok: false, errors: string[], record?: object }}
+ */
+function appendAnalysisHistory(partialPayload) {
+  const merged = createEmptyAnalysisRecord(partialPayload);
+  const validation = validateAnalysisRecord(merged);
+  if (!validation.ok) {
+    console.warn('[history] AnalysisRecord validation failed:', validation.errors);
+    return { ok: false, errors: validation.errors, record: merged };
+  }
+  try {
+    ensureLocalDataFiles();
+    let h = { entries: [] };
+    if (fs.existsSync(ANALYSIS_HISTORY_JSON)) {
+      h = JSON.parse(fs.readFileSync(ANALYSIS_HISTORY_JSON, 'utf8'));
+    }
+    if (!Array.isArray(h.entries)) h.entries = [];
+    h.entries.push(merged);
+    const cap = 5000;
+    if (h.entries.length > cap) h.entries = h.entries.slice(-cap);
+    fs.writeFileSync(ANALYSIS_HISTORY_JSON, JSON.stringify(h, 'utf8'));
+  } catch (err) {
+    console.warn('[history] appendAnalysisHistory:', err && err.message);
+    return { ok: false, errors: [err && err.message ? String(err.message) : 'write_failed'] };
+  }
+  return { ok: true, record: merged };
+}
+
 function ensureLocalDataFiles() {
   try {
     const dir = path.dirname(USERS_JSON);
@@ -887,23 +1078,6 @@ function ensureLocalDataFiles() {
     }
   } catch (err) {
     console.warn('[data] ensureLocalDataFiles:', err && err.message);
-  }
-}
-
-function appendAnalysisHistory(entry) {
-  try {
-    ensureLocalDataFiles();
-    let h = { entries: [] };
-    if (fs.existsSync(ANALYSIS_HISTORY_JSON)) {
-      h = JSON.parse(fs.readFileSync(ANALYSIS_HISTORY_JSON, 'utf8'));
-    }
-    if (!Array.isArray(h.entries)) h.entries = [];
-    h.entries.push(entry);
-    const cap = 5000;
-    if (h.entries.length > cap) h.entries = h.entries.slice(-cap);
-    fs.writeFileSync(ANALYSIS_HISTORY_JSON, JSON.stringify(h), 'utf8');
-  } catch (err) {
-    console.warn('[history] appendAnalysisHistory:', err && err.message);
   }
 }
 
@@ -1007,6 +1181,41 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === 'GET' && reqPath === '/api/exercise-catalog') {
+    const exercises = listCatalogForUi();
+    sendJson(res, 200, {
+      ok: true,
+      count: exercises.length,
+      source: 'exerciseCatalog.js',
+      exercises
+    });
+    if (exercises.length !== exerciseCatalog.length) {
+      console.warn(
+        '[catalog] count mismatch UI=%d catalog=%d',
+        exercises.length,
+        exerciseCatalog.length
+      );
+    }
+    return;
+  }
+
+  // --- TrainIQ: serve kinesiology exercise registry (knowledge graph) for LLM prompt injection ---
+  if (req.method === 'GET' && reqPath.startsWith('/api/exercise-registry/')) {
+    const rawKey = reqPath.slice('/api/exercise-registry/'.length);
+    const key = decodeURIComponent(String(rawKey || '').trim().toLowerCase());
+    if (!key) {
+      sendJson(res, 400, { ok: false, error: 'Missing exercise key' });
+      return;
+    }
+    const exercise = getExercise(key);
+    if (!exercise) {
+      sendJson(res, 404, { ok: false, error: 'Unknown exercise key', key });
+      return;
+    }
+    sendJson(res, 200, { ok: true, exercise });
+    return;
+  }
+
   if (req.method === 'GET' && reqPath === '/api/progress') {
     const db = readUsersDb();
     const username = getSessionUsername(db, getBearerToken(req));
@@ -1021,7 +1230,10 @@ const server = http.createServer((req, res) => {
       return;
     }
     const user = db.users[username];
-    const list = (user && user.progress && user.progress[exerciseKey]) || [];
+    const rawList = (user && user.progress && user.progress[exerciseKey]) || [];
+    // REPLACE: entries used to be only { at, score }. Now each slot may be a full AnalysisRecord;
+    // we add at/score aliases for Chart.js and older clients.
+    const list = rawList.map(mapProgressEntryForClient);
     sendJson(res, 200, { entries: list });
     return;
   }
@@ -1041,22 +1253,43 @@ const server = http.createServer((req, res) => {
         sendJson(res, 400, { error: 'exerciseKey ו-score נדרשים' });
         return;
       }
+
+      // Optional: warn when key is absent from the knowledge graph (still allowed for forward-compat).
+      if (!getExercise(exerciseKey)) {
+        console.warn('[progress] exercise_key not in exerciseRegistry:', exerciseKey);
+      }
+
+      // REPLACE: build rich AnalysisRecord from body (extended fields optional for backward compatibility).
+      let partial = buildAnalysisRecordPartialFromBody(parsed, username);
+      let hist = appendAnalysisHistory(partial);
+      if (!hist.ok) {
+        console.warn('[progress] primary AnalysisRecord rejected; saving minimal fallback:', hist.errors);
+        partial = buildFallbackAnalysisRecordPartial(username, exerciseKey, score);
+        hist = appendAnalysisHistory(partial);
+      }
+
+      const record =
+        hist.ok && hist.record
+          ? hist.record
+          : createEmptyAnalysisRecord(buildFallbackAnalysisRecordPartial(username, exerciseKey, score));
+
       const user = db.users[username];
       user.progress = user.progress || {};
       if (!Array.isArray(user.progress[exerciseKey])) user.progress[exerciseKey] = [];
-      user.progress[exerciseKey].push({ at: Date.now(), score: Math.max(0, Math.min(100, Math.round(score))) });
+      // Store the full validated document (same shape as analysis_history rows).
+      user.progress[exerciseKey].push(record);
       const cap = 200;
       if (user.progress[exerciseKey].length > cap) {
         user.progress[exerciseKey] = user.progress[exerciseKey].slice(-cap);
       }
       writeUsersDb(db);
-      appendAnalysisHistory({
-        at: Date.now(),
-        username,
-        exerciseKey,
-        score: Math.max(0, Math.min(100, Math.round(score)))
+
+      sendJson(res, 200, {
+        ok: true,
+        count: user.progress[exerciseKey].length,
+        analysis_id: record.analysis_id,
+        history_saved: !!hist.ok
       });
-      sendJson(res, 200, { ok: true, count: user.progress[exerciseKey].length });
     }).catch(e => sendJson(res, 400, { error: e.message }));
     return;
   }
@@ -1097,7 +1330,7 @@ const server = http.createServer((req, res) => {
     refreshAiKeysFromDisk();
     if (!analysisKeysConfigured()) {
       console.error('[env] אין מפתח ניתוח אחרי refreshAiKeysFromDisk. צפוי .env ב:', path.join(__dirname, '.env'), '| cwd:', process.cwd());
-      sendJson(res, 500, { error: 'חסר מפתח ניתוח בשרת. הגדר בקובץ .env ליד server.js לפחות אחד: GEMINI_API_KEY או OPENAI_API_KEY, והרץ node server.js מאותה תיקייה.' });
+      sendJson(res, 500, { error: 'מנוע TrainIQ אינו מוגדר בשרת. פנה למנהל המערכת להפעלת שירות הניתוח.' });
       return;
     }
     if ((analysisQueue.length + activeAnalysisWorkers) >= QUEUE_MAX_SIZE) {
@@ -1111,7 +1344,7 @@ const server = http.createServer((req, res) => {
         return;
       }
       if (isPhoneFirstRequest(req)) {
-        const result = await runAnalysis(parsed.parts);
+        const result = await runAnalysis(parsed.parts, { skipCache: shouldSkipAnalysisCache(req) });
         if (result.ok) {
           sendJson(res, 200, {
             id: `direct-${Date.now()}`,
@@ -1129,7 +1362,7 @@ const server = http.createServer((req, res) => {
         });
         return;
       }
-      const job = createJob(parsed.parts);
+      const job = createJob(parsed.parts, { skipCache: shouldSkipAnalysisCache(req) });
       sendJson(res, 202, getPublicJob(job));
     }).catch(e => {
       sendJson(res, 400, { error: e.message });
@@ -1141,7 +1374,7 @@ const server = http.createServer((req, res) => {
     refreshAiKeysFromDisk();
     if (!analysisKeysConfigured()) {
       console.error('[env] אין מפתח ניתוח אחרי refreshAiKeysFromDisk. צפוי .env ב:', path.join(__dirname, '.env'), '| cwd:', process.cwd());
-      sendJson(res, 500, { error: 'חסר מפתח ניתוח בשרת. הגדר בקובץ .env ליד server.js לפחות אחד: GEMINI_API_KEY או OPENAI_API_KEY, והרץ node server.js מאותה תיקייה.' });
+      sendJson(res, 500, { error: 'מנוע TrainIQ אינו מוגדר בשרת. פנה למנהל המערכת להפעלת שירות הניתוח.' });
       return;
     }
     readJsonBody(req, res).then(parsed => {
@@ -1162,7 +1395,7 @@ const server = http.createServer((req, res) => {
       const jobs = [];
       for (const item of items) {
         if (!item || !Array.isArray(item.parts) || !item.parts.length) continue;
-        const job = createJob(item.parts);
+        const job = createJob(item.parts, { skipCache: shouldSkipAnalysisCache(req) });
         jobs.push({
           client_id: item.client_id || null,
           job_id: job.id,
@@ -1195,7 +1428,7 @@ const server = http.createServer((req, res) => {
     refreshAiKeysFromDisk();
     if (!analysisKeysConfigured()) {
       console.error('[env] אין מפתח ניתוח אחרי refreshAiKeysFromDisk. צפוי .env ב:', path.join(__dirname, '.env'), '| cwd:', process.cwd());
-      sendJson(res, 500, { error: 'חסר מפתח ניתוח בשרת. הגדר בקובץ .env ליד server.js לפחות אחד: GEMINI_API_KEY או OPENAI_API_KEY, והרץ node server.js מאותה תיקייה.' });
+      sendJson(res, 500, { error: 'מנוע TrainIQ אינו מוגדר בשרת. פנה למנהל המערכת להפעלת שירות הניתוח.' });
       return;
     }
     readJsonBody(req, res).then(async parsed => {
@@ -1206,7 +1439,7 @@ const server = http.createServer((req, res) => {
           sendJson(res, 400, { error: 'Missing parts[] in request body' });
           return;
         }
-        const result = await runAnalysis(parts);
+        const result = await runAnalysis(parts, { skipCache: shouldSkipAnalysisCache(req) });
         if (result.ok) {
           sendJson(res, 200, result.payload);
           return;
