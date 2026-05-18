@@ -1,0 +1,13 @@
+{
+  "name": "ai-coach-clean",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI Coach server",
+  "main": "server.js",
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
